@@ -1,10 +1,12 @@
 {
   "6366392934": {
     "flow": "new_channel",
-    "step": "name",
+    "step": "slug",
     "data": {
       "niche_key": "luxury_lifestyle",
-      "language": "en"
+      "language": "en",
+      "name": "LuxeVista",
+      "suggested_slug": "luxury_lifestyle_en"
     }
   }
 }
