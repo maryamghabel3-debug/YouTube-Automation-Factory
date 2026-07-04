@@ -72,7 +72,20 @@ def send(chat, text, reply_to=None):
     d = {"chat_id": chat, "text": text[:4000], "parse_mode": "Markdown"}
     if reply_to:
         d["reply_to_message_id"] = reply_to
-    return tg("sendMessage", d)
+    result = tg("sendMessage", d)
+    if not result.get("ok"):
+        # Markdown parse errors (unescaped _ * [ ] ( ) etc in dynamic content
+        # like niche labels) are a common silent-failure cause -- retry once
+        # as plain text so the user still gets SOME response instead of
+        # nothing, and always log the real reason to the Actions log.
+        print(f"[send] sendMessage failed for chat {chat}: {result}")
+        if d.get("parse_mode"):
+            d2 = {k: v for k, v in d.items() if k != "parse_mode"}
+            result2 = tg("sendMessage", d2)
+            if not result2.get("ok"):
+                print(f"[send] plain-text retry also failed for chat {chat}: {result2}")
+            return result2
+    return result
 
 
 def send_video(chat, video_path, caption=""):
