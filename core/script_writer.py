@@ -68,7 +68,9 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
         if "data" in result and isinstance(result["data"], list) and result["data"]:
             return result["data"], result["provider"]
         if "error" in result:
-            print(f"[ScriptWriter] All LLM providers failed, using fallback: {result['error']}")
+            attempts = result.get("attempts", [])
+            detail = f" | attempts: {attempts}" if attempts else " (no configured provider raised an error -- check API keys)"
+            print(f"[ScriptWriter] All LLM providers failed, using fallback: {result['error']}{detail}")
         return [], ""
 
     def _fallback_script(self, topic: str, language: str) -> list:
