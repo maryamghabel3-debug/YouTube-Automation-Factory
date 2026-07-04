@@ -1,31 +1,58 @@
-# 🔐 راه‌اندازی آپلود خودکار یوتیوب (یک‌بار برای همیشه، برای هر کانال)
+# 🔐 راه‌اندازی آپلود خودکار یوتیوب
 
-این مرحله باید **یک‌بار** برای هر کانال یوتیوب (با مرورگر، دستی) انجام بشه. بعدش برای همیشه (روی GitHub Actions، بدون مرورگر) کار می‌کنه.
+خبر خوب: از این به بعد، برای **هر کانال جدید** فقط باید مرحله «ساخت یک OAuth Client» (مرحله ۱و۲ زیر) را **یک‌بار برای کل پروژه** انجام دهید. بعد از آن، برای هر کانال جدید فقط کافیست توی تلگرام بنویسید `/oauth شناسه_کانال` — بدون باز کردن گیت‌هاب، بدون کپی/پیست دستی توکن، بدون نیاز به کامپیوتر (حتی از گوشی هم جواب می‌ده).
 
 ## چرا این مرحله لازمه؟
 کلید ساده (`YOUTUBE_API_KEY`) که از قبل دارید فقط برای *خوندن* اطلاعات عمومی کار می‌کنه (جستجو، آمار). برای *آپلود* ویدیو، یوتیوب به یک هویت واقعی (OAuth2) نیاز داره که یک‌بار تأیید بشه.
+
+---
 
 ## مرحله ۱: ساخت پروژه گوگل کلاود (یک‌بار، برای همه کانال‌ها مشترک)
 1. برید به [console.cloud.google.com](https://console.cloud.google.com)
 2. یک پروژه جدید بسازید (یا از پروژه‌ای که برای `YOUTUBE_API_KEY` ساختید استفاده کنید)
 3. از منو: **APIs & Services → Library** → دنبال `YouTube Data API v3` بگردید → **Enable**
-
-## مرحله ۲: ساخت OAuth Client ID (یک‌بار)
-1. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
-2. اگه اولین باره، باید **OAuth consent screen** رو تنظیم کنید:
+4. **OAuth consent screen** رو تنظیم کنید (اگه قبلاً نکردید):
    - User Type: External
    - App name: هرچی (مثلاً "My Video Factory")
-   - Scopes: نیازی به اضافه کردن دستی نیست
-   - Test users: ایمیل گوگلی که مالک کانال‌های یوتیوبه رو اضافه کنید
-3. Application type: **Desktop app**
-4. بعد از ساخته شدن، **Client ID** و **Client Secret** رو کپی کنید
+   - Test users: ایمیل گوگلی مالک کانال‌های یوتیوب رو اضافه کنید
+   - ⚠️ **مهم**: بعداً از حالت "Testing" به "Publish App" ببرید — وگرنه refresh token بعد از ۷ روز منقضی می‌شه
 
-### ⚠️ مهم: از حالت Testing به Production ببرید
-اگه اپ در حالت "Testing" بمونه، refresh token بعد از ۷ روز منقضی می‌شه. برای همیشگی شدنش:
-- **OAuth consent screen → Publish App**
+## مرحله ۲: ساخت OAuth Client از نوع "TVs and Limited Input devices" (یک‌بار)
+این نوع کلاینت مخصوص جریانی به اسم **Device Authorization Grant** است — دقیقاً همون چیزی که باعث می‌شه بات تلگرام بتونه بدون مرورگر روی سرور، کل فرآیند رو خودکار انجام بده.
 
-## مرحله ۳: گرفتن Refresh Token برای هر کانال (یک‌بار برای هر کانال)
-روی کامپیوتر خودتون (نه سرور، چون به مرورگر نیاز داره):
+1. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
+2. Application type: **TVs and Limited Input devices** (⚠️ نه "Desktop app" — این نوع خاص لازمه)
+3. بعد از ساخته شدن، **Client ID** و **Client Secret** رو کپی کنید
+
+## مرحله ۳: اضافه کردن به GitHub Secrets (یک‌بار، فقط همین دوتا)
+به ریپازیتوری بروید: **Settings → Secrets and variables → Actions → New repository secret** و این دو مقدار رو اضافه کنید:
+- `YOUTUBE_OAUTH_CLIENT_ID`
+- `YOUTUBE_OAUTH_CLIENT_SECRET`
+
+از این به بعد، دیگه نیازی به دست زدن به این صفحه ندارید — بقیه (توکن هر کانال) رو خود بات مدیریت می‌کنه.
+
+## مرحله ۴: وصل کردن هر کانال (از تلگرام، هر وقت خواستید)
+```
+/newchannel     ← کانال رو در فکتوری ثبت کنید (نیچ/زبان/اسم)
+/oauth شناسه_کانال
+```
+بات یک لینک (`https://www.google.com/device`) و یک کد کوتاه (مثلاً `ABCD-1234`) بهتون می‌ده:
+1. اون لینک رو با هر مرورگری باز کنید (گوشی، لپ‌تاپ، هرچی)
+2. کد رو وارد کنید
+3. با اکانت گوگلی که **مالک همون کانال یوتیوب** هست وارد بشید و اجازه بدید
+
+بات هر ۵ دقیقه یک‌بار (روی کرون GitHub Actions) خودش چک می‌کنه؛ به محض تأیید شما:
+- ✅ توکن رو با رمزنگاری sealed-box مستقیماً در GitHub Secrets ذخیره می‌کنه (`YOUTUBE_REFRESH_TOKEN_<شناسه_کانال>`)
+- ✅ خودش خط جدید مربوطه رو در `.github/workflows/run-factory.yml` اضافه می‌کنه
+- ✅ بهتون توی تلگرام پیام می‌ده که کانال وصل شد
+
+هیچ نیازی به کپی/پیست دستی توکن، هیچ نیازی به اجرای اسکریپت روی کامپیوتر خودتون نیست.
+
+---
+
+## 🛠 روش جایگزین (دستی، برای کسی که ترجیح می‌ده از کامپیوتر خودش کار کنه)
+
+اگه به هر دلیلی می‌خواید این کار رو کاملاً دستی و آفلاین انجام بدید (بدون بات)، هنوز می‌تونید از روش قدیمی‌تر با یک OAuth Client از نوع **Desktop app** استفاده کنید:
 
 ```bash
 cd YouTube-Automation-Factory
@@ -33,27 +60,9 @@ pip install -r requirements.txt
 python scripts/setup_youtube_oauth.py
 ```
 
-- Client ID و Client Secret رو که در مرحله ۲ گرفتید وارد کنید
-- یک اسم مستعار برای کانال بدید (مثلاً `ELINA` یا `LUXE`)
-- مرورگر باز می‌شه؛ با اکانت گوگلی که **مالک همون کانال یوتیوب** هست وارد بشید و اجازه بدید
-- در نهایت این خروجی رو می‌گیرید:
+این اسکریپت مرورگر رو باز می‌کنه، شما اجازه می‌دید، و در نهایت مقادیر `YOUTUBE_OAUTH_CLIENT_ID` / `YOUTUBE_OAUTH_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN_<اسم>` رو چاپ می‌کنه که باید خودتون دستی به GitHub Secrets اضافه کنید (Settings → Secrets and variables → Actions) و سپس با `python core/channel_spawner.py` کانال رو ثبت کنید.
 
-```
-YOUTUBE_OAUTH_CLIENT_ID = ...
-YOUTUBE_OAUTH_CLIENT_SECRET = ...
-YOUTUBE_REFRESH_TOKEN_ELINA = ...
-```
-
-## مرحله ۴: اضافه کردن به GitHub Secrets
-به ریپازیتوری بروید: **Settings → Secrets and variables → Actions → New repository secret**
-
-هر سه مقدار بالا رو اضافه کنید. برای کانال دوم، فقط کافیه دوباره مرحله ۳ رو با اسم مستعار متفاوت (مثلاً `LUXE`) تکرار کنید و `YOUTUBE_REFRESH_TOKEN_LUXE` رو اضافه کنید (Client ID/Secret یکی می‌مونه، چون هر دو کانال از یک پروژه گوگل استفاده می‌کنن).
-
-## مرحله ۵: ثبت کانال در فکتوری
-```bash
-python core/channel_spawner.py
-```
-و وقتی از `refresh_token_env` پرسید، دقیقاً همون اسمی که در Secrets گذاشتید رو بدید (مثلاً `YOUTUBE_REFRESH_TOKEN_ELINA`).
+⚠️ توجه: کلاینت نوع "Desktop app" با روش خودکار بات (device flow) کار **نمی‌کنه** — این دو نوع کلاینت را نمی‌توان به‌جای هم استفاده کرد؛ برای روش بات حتماً باید کلاینتی از نوع "TVs and Limited Input devices" (مرحله ۲ بالا) بسازید.
 
 ---
 
@@ -65,4 +74,13 @@ python core/channel_spawner.py
 | Pixabay | فوتیج/عکس رایگان (پشتیبان) | https://pixabay.com/api/docs/ |
 | Gemini | نوشتن اسکریپت اصیل | https://aistudio.google.com |
 
-این‌ها رو هم به‌عنوان `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `GEMINI_API_KEY` در GitHub Secrets اضافه کنید.
+این‌ها رو هم به‌عنوان `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `GEMINI_API_KEY` در GitHub Secrets اضافه کنید — این سه‌تا رو (برخلاف مراحل بالا) باید خودتون یک‌بار دستی اضافه کنید چون نیازی به هویت گوگل ندارند و بات جایی برای گرفتن خودکارشون نداره.
+
+## 🤖 راه‌اندازی خود بات (یک‌بار)
+
+1. توی تلگرام با [@BotFather](https://t.me/BotFather) یک بات جدید بسازید (`/newbot`) — این بات **جدا** از بات پروژه elina-radman است
+2. توکنی که می‌ده رو به‌عنوان `TELEGRAM_BOT_TOKEN_FACTORY` در GitHub Secrets این ریپازیتوری اضافه کنید
+3. یک PAT گیت‌هاب با scope کامل `repo` (برای نوشتن Secrets و ساخت Release) رو به‌عنوان `GH_PAT` اضافه کنید — اگه از قبل توی این ریپو دارید نیازی به کار جدید نیست
+4. به بات پیام `/start` بدید — همین‌جا چت شما ثبت می‌شه تا بعداً بتونه نتیجه ویدیوها رو براتون بفرسته
+
+از این به بعد workflow `factory-bot.yml` هر ۵ دقیقه یک‌بار پیام‌های جدید رو چک می‌کنه.

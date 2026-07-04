@@ -11,6 +11,14 @@ on:
         description: 'Target narration length per video (minutes)'
         required: false
         default: '8'
+      only_channel:
+        description: 'Only process this channel id (blank = all active channels)'
+        required: false
+        default: ''
+      deliver_mode:
+        description: 'How to deliver the finished video: telegram | release | both'
+        required: false
+        default: 'both'
 
 concurrency:
   group: git-push-main
@@ -22,7 +30,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,11 +47,20 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
           YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
-          # Per-channel refresh tokens (add one secret per channel you register)
+          # Per-channel refresh tokens — the FactoryBot (factory-bot.yml) adds
+          # a new line here automatically via core/workflow_editor.py whenever
+          # a new channel finishes OAuth device-flow approval, so you should
+          # rarely need to add one by hand.
           YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}
           YOUTUBE_REFRESH_TOKEN_LUXE: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXE }}
+          TELEGRAM_BOT_TOKEN_FACTORY: ${{ secrets.TELEGRAM_BOT_TOKEN_FACTORY }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
           SKIP_UPLOAD: ${{ github.event.inputs.skip_upload || '0' }}
           TARGET_MINUTES: ${{ github.event.inputs.target_minutes || '8' }}
+          ONLY_CHANNEL: ${{ github.event.inputs.only_channel || '' }}
+          DELIVER_MODE: ${{ github.event.inputs.deliver_mode || 'both' }}
         run: python main.py
       - name: Push performance log & channel database changes
         env:
@@ -55,8 +72,12 @@ jobs:
           git add channels/ || true
           if ! git diff --staged --quiet; then
             git commit -m "🤖 Factory run [$(date +%Y-%m-%d)]"
-            for i in 1 2 3; do
-              if git push; then break; fi
+            for i in 1 2 3 4 5; do
+              if git push; then
+                echo "✅ Pushed successfully"
+                break
+              fi
+              echo "⚠️ Push rejected (attempt $i/5), rebasing onto latest main..."
               git fetch origin main
               git rebase origin/main
               sleep $((RANDOM % 5 + 2))

@@ -309,3 +309,192 @@ def test_main_pipeline_builds_video_without_uploading(workdir, monkeypatch):
     if not videos:
         pytest.skip("no video produced (likely edge-tts unreachable in this sandbox)")
     assert os.path.getsize(videos[0]) > 5000
+
+
+# --------------------------------------------------------------------------- #
+# ChannelSpawner management helpers (pause/resume/remove/get/set-token-env) —
+# added to support the FactoryBot's /pause /resume /remove /oauth commands.
+# --------------------------------------------------------------------------- #
+def test_channel_spawner_lifecycle_management(workdir):
+    from core.channel_spawner import ChannelSpawner
+
+    sp = ChannelSpawner()
+    sp.register_channel("mgmt_ch", "Mgmt Test", "finance", "en", "YOUTUBE_REFRESH_TOKEN_MGMT")
+
+    assert sp.get_channel("mgmt_ch")["name"] == "Mgmt Test"
+    assert sp.get_channel("does_not_exist") == {}
+
+    assert sp.set_active("mgmt_ch", False) is True
+    assert sp.get_channel("mgmt_ch")["active"] is False
+    assert sp.set_active("nope", False) is False
+
+    assert sp.set_refresh_token_env("mgmt_ch", "YOUTUBE_REFRESH_TOKEN_MGMT_V2") is True
+    assert sp.get_channel("mgmt_ch")["refresh_token_env"] == "YOUTUBE_REFRESH_TOKEN_MGMT_V2"
+
+    assert sp.remove_channel("mgmt_ch") is True
+    assert sp.get_channel("mgmt_ch") == {}
+    assert sp.remove_channel("mgmt_ch") is False  # already gone
+
+
+# --------------------------------------------------------------------------- #
+# WorkflowEditor — idempotent secret-line insertion into workflow YAML
+# --------------------------------------------------------------------------- #
+def test_workflow_editor_inserts_new_secret_once(workdir):
+    from core.workflow_editor import ensure_secret_in_workflow
+
+    wf_path = workdir / "fake-workflow.yml"
+    wf_path.write_text(
+        "jobs:\n"
+        "  run:\n"
+        "    steps:\n"
+        "      - env:\n"
+        "          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}\n"
+        "          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}\n"
+        "          YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}\n"
+    )
+
+    changed = ensure_secret_in_workflow(str(wf_path), "YOUTUBE_REFRESH_TOKEN_LUXE_EN")
+    assert changed is True
+    text = wf_path.read_text()
+    assert "secrets.YOUTUBE_REFRESH_TOKEN_LUXE_EN" in text
+
+    # Calling again with the same secret must be a no-op (idempotent)
+    changed_again = ensure_secret_in_workflow(str(wf_path), "YOUTUBE_REFRESH_TOKEN_LUXE_EN")
+    assert changed_again is False
+
+
+def test_workflow_editor_missing_anchor_returns_false(workdir):
+    from core.workflow_editor import ensure_secret_in_workflow
+
+    wf_path = workdir / "no-anchor.yml"
+    wf_path.write_text("jobs:\n  run:\n    steps: []\n")
+
+    changed = ensure_secret_in_workflow(str(wf_path), "YOUTUBE_REFRESH_TOKEN_X")
+    assert changed is False
+
+
+# --------------------------------------------------------------------------- #
+# PendingSetups — small JSON state store surviving across bot ticks
+# --------------------------------------------------------------------------- #
+def test_pending_setups_round_trip(workdir):
+    from core import pending_setups
+
+    device_info = {
+        "device_code": "dc123", "user_code": "ABCD-1234",
+        "verification_url": "https://google.com/device",
+        "interval": 5, "expires_in": 1800,
+    }
+    pending_setups.start("111", "test_chan", "finance", "en", "Test Channel", "default", device_info)
+
+    pending = pending_setups.all_pending()
+    assert len(pending) == 1
+    assert pending[0]["channel_id"] == "test_chan"
+    assert pending[0]["user_code"] == "ABCD-1234"
+
+    pending_setups.mark_status("test_chan", "approved")
+    # mark_status doesn't remove from "awaiting_google_approval" filter unless
+    # the status literally changes away from it
+    assert pending_setups.all_pending() == []
+
+    pending_setups.mark_done("test_chan")
+    assert pending_setups.all_pending() == []
+
+
+# --------------------------------------------------------------------------- #
+# GitHubSecrets — sealed-box encryption round trip (no live GitHub call)
+# --------------------------------------------------------------------------- #
+def test_gh_secrets_encrypt_round_trip():
+    pytest.importorskip("nacl")
+    import base64
+    from nacl import public, encoding
+    from core.gh_secrets import GitHubSecrets
+
+    priv = public.PrivateKey.generate()
+    pub_b64 = priv.public_key.encode(encoding.Base64Encoder()).decode()
+
+    enc = GitHubSecrets._encrypt(pub_b64, "super-secret-refresh-token")
+    box = public.SealedBox(priv)
+    decrypted = box.decrypt(base64.b64decode(enc))
+    assert decrypted.decode() == "super-secret-refresh-token"
+
+
+def test_gh_secrets_missing_credentials_returns_clean_error(workdir, monkeypatch):
+    monkeypatch.delenv("GH_PAT", raising=False)
+    monkeypatch.delenv("REPO_OWNER", raising=False)
+    monkeypatch.delenv("REPO_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    from core.gh_secrets import GitHubSecrets
+
+    result = GitHubSecrets(owner="", repo="", token="").set_secret("X", "y")
+    assert result["ok"] is False
+    assert "missing" in result["error"]
+
+
+# --------------------------------------------------------------------------- #
+# GitHubRelease / GitHubActions — clean errors without live credentials
+# --------------------------------------------------------------------------- #
+def test_gh_release_missing_credentials_returns_clean_error(workdir):
+    from core.gh_release import GitHubRelease
+
+    result = GitHubRelease(owner="", repo="", token="").publish_video("no.mp4", "title")
+    assert result["ok"] is False
+    assert "missing" in result["error"]
+
+
+def test_gh_release_missing_video_file_returns_clean_error(workdir):
+    from core.gh_release import GitHubRelease
+
+    result = GitHubRelease(owner="o", repo="r", token="t").publish_video(
+        "does_not_exist.mp4", "title"
+    )
+    assert result["ok"] is False
+    assert result["error"] == "video_file_missing"
+
+
+def test_gh_actions_missing_credentials_returns_clean_error(workdir, monkeypatch):
+    monkeypatch.delenv("GH_PAT", raising=False)
+    monkeypatch.delenv("REPO_OWNER", raising=False)
+    monkeypatch.delenv("REPO_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    from core.gh_actions import trigger_run_factory
+
+    result = trigger_run_factory({"skip_upload": "1"})
+    assert result["ok"] is False
+    assert "missing" in result["error"]
+
+
+# --------------------------------------------------------------------------- #
+# OAuth device flow — clean handling of Google's documented error responses
+# --------------------------------------------------------------------------- #
+def test_oauth_device_poll_handles_pending_and_denied(monkeypatch):
+    from core import oauth_device
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_post_pending(url, data=None, timeout=None):
+        return FakeResp(400, {"error": "authorization_pending"})
+
+    monkeypatch.setattr(oauth_device.requests, "post", fake_post_pending)
+    result = oauth_device.poll_once("cid", "csecret", "dcode")
+    assert result["status"] == "pending"
+
+    def fake_post_denied(url, data=None, timeout=None):
+        return FakeResp(400, {"error": "access_denied"})
+
+    monkeypatch.setattr(oauth_device.requests, "post", fake_post_denied)
+    result = oauth_device.poll_once("cid", "csecret", "dcode")
+    assert result["status"] == "denied"
+
+    def fake_post_approved(url, data=None, timeout=None):
+        return FakeResp(200, {"refresh_token": "rt-123", "access_token": "at-456"})
+
+    monkeypatch.setattr(oauth_device.requests, "post", fake_post_approved)
+    result = oauth_device.poll_once("cid", "csecret", "dcode")
+    assert result["status"] == "approved"
+    assert result["refresh_token"] == "rt-123"

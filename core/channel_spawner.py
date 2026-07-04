@@ -71,6 +71,45 @@ class ChannelSpawner:
     def list_channels(self) -> list:
         return self._load_db().get("channels", [])
 
+    def get_channel(self, channel_id: str) -> dict:
+        for c in self.list_channels():
+            if c["id"] == channel_id:
+                return c
+        return {}
+
+    def set_active(self, channel_id: str, active: bool) -> bool:
+        db = self._load_db()
+        found = False
+        for c in db.get("channels", []):
+            if c["id"] == channel_id:
+                c["active"] = active
+                found = True
+        if found:
+            self._save_db(db)
+        return found
+
+    def set_refresh_token_env(self, channel_id: str, refresh_token_env: str) -> bool:
+        """Used once OAuth is completed via the device flow so the channel's
+        placeholder env-var name is confirmed/updated."""
+        db = self._load_db()
+        found = False
+        for c in db.get("channels", []):
+            if c["id"] == channel_id:
+                c["refresh_token_env"] = refresh_token_env
+                found = True
+        if found:
+            self._save_db(db)
+        return found
+
+    def remove_channel(self, channel_id: str) -> bool:
+        db = self._load_db()
+        before = len(db.get("channels", []))
+        db["channels"] = [c for c in db.get("channels", []) if c["id"] != channel_id]
+        changed = len(db["channels"]) != before
+        if changed:
+            self._save_db(db)
+        return changed
+
 
 if __name__ == "__main__":
     print(f"{ChannelSpawner().name} — register a real channel interactively.")

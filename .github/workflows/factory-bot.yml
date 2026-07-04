@@ -1,0 +1,55 @@
+name: Factory Telegram Bot
+on:
+  schedule: [{cron: '*/5 * * * *'}]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: git-push-main
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests pynacl
+      - name: Run FactoryBot
+        env:
+          TELEGRAM_BOT_TOKEN_FACTORY: ${{ secrets.TELEGRAM_BOT_TOKEN_FACTORY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+        run: python scripts/factory_bot.py
+      - name: Push bot state changes
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "YouTube Factory Bot"
+          git config user.email "bot@youtube-factory.ai"
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" || true
+          git add channels/ .github/workflows/run-factory.yml || true
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 FactoryBot state update [$(date +%Y-%m-%d %H:%M)]"
+            for i in 1 2 3 4 5; do
+              if git push; then
+                echo "✅ Pushed successfully"
+                break
+              fi
+              echo "⚠️ Push rejected (attempt $i/5), rebasing onto latest main..."
+              git fetch origin main
+              git rebase origin/main
+              sleep $((RANDOM % 5 + 2))
+            done
+          fi

@@ -8,3 +8,6 @@ opencv-python-headless>=4.8
 Pillow>=10.0
 numpy>=1.26
 google-generativeai>=0.8
+# Needed by core/gh_secrets.py to encrypt values before writing GitHub
+# repo secrets via the REST API (libsodium sealed-box, as GitHub requires).
+pynacl>=1.5

@@ -18,12 +18,28 @@
 | 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) |
 | 📊 PerformanceAnalyzer | ✅ آمار واقعی بازدید/لایک از YouTube API |
 
-همه با **۱۷ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts) است.
+همه با **۲۹ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts) است.
 
 ## 💰 هزینه: تقریباً $۰ در ماه
 تمام سرویس‌های استفاده‌شده رایگان و بدون نیاز به کارت بانکی بین‌المللی هستند (فقط ثبت‌نام ایمیلی).
 
-## 🚀 شروع سریع
+## 🤖 کنترل کامل از تلگرام — بدون باز کردن گیت‌هاب
+
+از این به بعد کل چرخه کار (اضافه کردن کانال جدید، وصل کردن اکانت یوتیوب، ساخت ویدیوی تستی، دریافت نتیجه) از طریق چت با یک بات تلگرام مستقل (`scripts/factory_bot.py`، جدا از بات پروژه elina-radman) انجام می‌شه:
+
+```
+/newchannel        ← نیچ + زبان + اسم کانال رو بپرس و ثبت کن
+/oauth <id>        ← اتصال واقعی به یوتیوب (بدون مرورگر روی سرور؛ فقط یک لینک+کد که خودتون تأیید می‌کنید)
+/testvideo <id>    ← ساخت یک ویدیوی تستی (بدون آپلود) و ارسال نتیجه
+/makevideo <id>    ← ساخت + آپلود واقعی
+/channels /status /pause /resume /remove /runall /help
+```
+
+راه‌اندازی این بات: `docs/YOUTUBE-OAUTH-SETUP.md` (بخش «راه‌اندازی خود بات»).
+
+ویدیوهای ساخته‌شده، بسته به حجم، مستقیم توی تلگرام ارسال می‌شن یا (اگه حجمشون زیاد باشه، یا صراحتاً بخواید) به‌صورت لینک دانلود دائمی روی **GitHub Releases** آپلود می‌شن.
+
+## 🚀 شروع سریع (روش دستی/خط‌فرمان، به‌عنوان جایگزین بات)
 
 ```bash
 pip install -r requirements.txt
@@ -57,16 +73,29 @@ YouTube-Automation-Factory/
 │   ├── stock_footage_fetcher.py   ← فوتیج/عکس از Pexels/Pixabay
 │   ├── video_assembler.py         ← رندر نهایی با FFmpeg
 │   ├── video_factory.py           ← اتصال همه اجزا به هم
-│   ├── channel_spawner.py         ← ثبت کانال جدید
+│   ├── channel_spawner.py         ← ثبت/مدیریت کانال (شامل pause/resume/remove)
 │   ├── auto_publisher.py          ← آپلود واقعی به یوتیوب (OAuth2)
-│   └── performance_analyzer.py    ← آمار واقعی بازدید/عملکرد
+│   ├── performance_analyzer.py    ← آمار واقعی بازدید/عملکرد
+│   ├── oauth_device.py            ← اتصال یوتیوب بدون مرورگر روی سرور (device flow)
+│   ├── gh_secrets.py              ← نوشتن خودکار GitHub Secrets (رمزنگاری‌شده)
+│   ├── gh_release.py              ← تحویل ویدیو به‌صورت لینک دانلود (GitHub Release)
+│   ├── gh_actions.py              ← اجرای فوری فکتوری از راه دور (workflow_dispatch)
+│   ├── workflow_editor.py         ← افزودن خودکار سکرت جدید به فایل ورک‌فلو
+│   ├── pending_setups.py          ← وضعیت اتصال‌های یوتیوب در حال انتظار
+│   └── telegram_notify.py         ← اطلاع‌رسانی نتیجه به تلگرام
 ├── channels/database.json         ← دیتابیس کانال‌های فعال
-├── scripts/setup_youtube_oauth.py ← تنظیم یک‌بار OAuth برای هر کانال
+├── scripts/
+│   ├── factory_bot.py             ← بات تلگرام کنترل‌پنل فکتوری (روش اصلی)
+│   ├── add_channel_wizard.py      ← ویزارد خط‌فرمان (جایگزین بات)
+│   └── setup_youtube_oauth.py     ← تنظیم دستی OAuth (جایگزین بات)
 ├── docs/YOUTUBE-OAUTH-SETUP.md    ← راهنمای کامل قدم‌به‌قدم
-└── tests/test_factory.py          ← ۱۷ تست خودکار (شامل end-to-end واقعی)
+├── docs/ADDING-A-NEW-CHANNEL.md   ← راهنمای اضافه کردن کانال/نیچ/زبان جدید
+└── tests/test_factory.py          ← ۲۹ تست خودکار (شامل end-to-end واقعی)
 ```
 
 ## 📄 اسناد بیشتر
 - `GAZARESH-BARRASI-CHETOR-EJRA-KONIM.md` — گزارش بررسی نسخه اولیه (بلوپرینت mock)
 - `PLAN-VIDEO-BA-FOOTAGE-AMADEH.md` — استراتژی کلی و تحقیق بازار (RPM نیچ‌ها، منابع فوتیج، قوانین یوتیوب)
-- `docs/YOUTUBE-OAUTH-SETUP.md` — راه‌اندازی آپلود خودکار
+- `docs/YOUTUBE-OAUTH-SETUP.md` — راه‌اندازی آپلود خودکار + راه‌اندازی بات
+- `docs/ADDING-A-NEW-CHANNEL.md` — اضافه کردن کانال/نیچ/زبان جدید
+
