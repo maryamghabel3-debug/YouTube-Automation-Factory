@@ -26,6 +26,7 @@ import requests
 from . import content_config as cfg
 from . import channel_memory
 from . import content_bank
+from .llm_router import LLMRouter
 
 _ATOM = "http://www.w3.org/2005/Atom"
 _UA = "YouTubeAutomationFactory/1.0 (topic research; +https://github.com/maryamghabel3-debug)"
@@ -133,26 +134,44 @@ class NicheAnalyzer:
 
         already_covered = set(channel_memory.recent_topics(channel_id)) if channel_id else set()
 
-        topics = [t for t in (self._reddit_topics(subs) if subs else []) if _is_safe_topic(t)]
-        # Independent second signal — combined with Reddit results so we're
-        # not fully dependent on one source's rate limits or a quiet week.
-        topics += self._google_trends_topics(search_terms) if search_terms else []
+        # If NO LLM provider is configured at all (see LLMRouter.any_provider_
+        # configured), a raw, unedited Reddit post title / Google Trends query
+        # is a BAD topic to build a video around: there's no AI step left to
+        # reframe it into a proper documentary-style angle, so it would fall
+        # straight through to the generic 5-line offline template. In that
+        # specific situation, skip the live-trending path entirely and go
+        # straight to the curated evergreen list (core/content_bank.py has
+        # real, hand-written, fact-checked scripts for those -- see
+        # docs/CONTENT-BANK.md). The moment a working LLM key is added, this
+        # skip no longer applies and live trending topics are used normally.
+        llm_available = LLMRouter.any_provider_configured()
 
-        fresh_topics = [t for t in topics if t not in already_covered]
-        if fresh_topics:
-            chosen = random.choice(fresh_topics[:10])
-            print(f"[{self.name}] Found real trending topic: '{chosen}'")
-            return chosen
-        if topics:
-            # Every trending topic found was already covered recently --
-            # still better than crashing, but note it clearly in the log.
-            chosen = random.choice(topics[:10])
-            print(f"[{self.name}] All trending topics already covered recently; reusing: '{chosen}'")
-            return chosen
+        if llm_available:
+            topics = [t for t in (self._reddit_topics(subs) if subs else []) if _is_safe_topic(t)]
+            # Independent second signal — combined with Reddit results so we're
+            # not fully dependent on one source's rate limits or a quiet week.
+            topics += self._google_trends_topics(search_terms) if search_terms else []
+
+            fresh_topics = [t for t in topics if t not in already_covered]
+            if fresh_topics:
+                chosen = random.choice(fresh_topics[:10])
+                print(f"[{self.name}] Found real trending topic: '{chosen}'")
+                return chosen
+            if topics:
+                # Every trending topic found was already covered recently --
+                # still better than crashing, but note it clearly in the log.
+                chosen = random.choice(topics[:10])
+                print(f"[{self.name}] All trending topics already covered recently; reusing: '{chosen}'")
+                return chosen
+        else:
+            print(f"[{self.name}] No LLM provider configured -- skipping raw live-trending "
+                  f"topics (they need an AI rewrite step to become a good script) and using "
+                  f"the curated evergreen list instead. See docs/CONTENT-BANK.md.")
 
         evergreen = [t for t in niche.get("evergreen_topics", []) if _is_safe_topic(t)]
         fresh_evergreen = [t for t in evergreen if t not in already_covered]
         candidates = fresh_evergreen or evergreen or ["An interesting topic worth exploring"]
+
 
         # Prefer a topic that has a real, hand-written, fact-checked script
         # in core/content_bank.py (see that module's docstring -- written by

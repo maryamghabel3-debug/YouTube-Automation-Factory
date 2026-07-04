@@ -87,6 +87,24 @@ class LLMRouter:
         self.name = "LLMRouter"
         self.usage_guard = UsageGuard()
 
+    @staticmethod
+    def any_provider_configured() -> bool:
+        """True if at least one LLM provider has a non-empty API key set.
+        Used by NicheAnalyzer to decide whether picking a raw, unedited
+        live-trending topic (a Reddit post title / Google Trends query) is
+        safe -- turning that kind of raw phrase into a good, well-structured
+        script really needs an LLM rewrite step. Without ANY provider
+        configured, core/content_bank.py's curated evergreen topics (real,
+        hand-written, fact-checked scripts -- see docs/CONTENT-BANK.md) are
+        a much better choice than a generic 5-line template built around an
+        arbitrary raw topic string."""
+        for name in ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                     "AVALAI_API_KEY", "GAPGPT_API_KEY", "DEEPSEEK_API_KEY",
+                     "MOONSHOT_API_KEY"):
+            if os.environ.get(name, "").strip():
+                return True
+        return False
+
     # ------------------------------------------------------------------ #
     # Per-provider callers. Each returns the raw text response, or raises
     # on failure (caught centrally in generate()).

@@ -761,6 +761,72 @@ def test_niche_analyzer_prefers_curated_topic_on_evergreen_fallback(monkeypatch)
     assert cb.has_script("psychology", "en", topic)
 
 
+def test_llm_router_any_provider_configured_false_when_all_keys_empty(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    for name in ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                 "AVALAI_API_KEY", "GAPGPT_API_KEY", "DEEPSEEK_API_KEY",
+                 "MOONSHOT_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert LLMRouter.any_provider_configured() is False
+
+
+def test_llm_router_any_provider_configured_true_when_one_key_set(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    for name in ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                 "AVALAI_API_KEY", "GAPGPT_API_KEY", "DEEPSEEK_API_KEY",
+                 "MOONSHOT_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "real-key")
+    assert LLMRouter.any_provider_configured() is True
+
+
+def test_niche_analyzer_skips_raw_live_trending_topics_without_any_llm_key(monkeypatch):
+    """Without any LLM key configured, a raw Reddit/Trends title would have
+    no AI rewrite step and would fall straight to the generic offline
+    template. NicheAnalyzer should skip live-trending topics entirely in
+    that case and go straight to the curated evergreen list instead."""
+    from core.niche_analyzer import NicheAnalyzer
+
+    for name in ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                 "AVALAI_API_KEY", "GAPGPT_API_KEY", "DEEPSEEK_API_KEY",
+                 "MOONSHOT_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    analyzer = NicheAnalyzer()
+    called = {"reddit": False, "trends": False}
+
+    def fake_reddit(subs, limit_per_sub=5):
+        called["reddit"] = True
+        return ["Some raw unedited Reddit post title"]
+
+    def fake_trends(keywords, geo="US"):
+        called["trends"] = True
+        return []
+
+    monkeypatch.setattr(analyzer, "_reddit_topics", fake_reddit)
+    monkeypatch.setattr(analyzer, "_google_trends_topics", fake_trends)
+    topic = analyzer.analyze_market("luxury_lifestyle", language="en")
+
+    assert called["reddit"] is False
+    assert called["trends"] is False
+    assert topic != "Some raw unedited Reddit post title"
+    from core import content_bank as cb
+    assert cb.has_script("luxury_lifestyle", "en", topic)
+
+
+def test_niche_analyzer_uses_live_trending_topics_when_llm_is_configured(monkeypatch):
+    from core.niche_analyzer import NicheAnalyzer
+
+    monkeypatch.setenv("GROQ_API_KEY", "real-key")
+    analyzer = NicheAnalyzer()
+    monkeypatch.setattr(analyzer, "_reddit_topics", lambda subs, limit_per_sub=5: ["A fresh live trending topic"])
+    monkeypatch.setattr(analyzer, "_google_trends_topics", lambda keywords, geo="US": [])
+    topic = analyzer.analyze_market("luxury_lifestyle", language="en")
+    assert topic == "A fresh live trending topic"
+
+
 def test_script_writer_passes_competitor_insights_into_prompt(monkeypatch):
     from core.script_writer import ScriptWriter
 
