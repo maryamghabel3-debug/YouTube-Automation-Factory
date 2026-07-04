@@ -498,3 +498,249 @@ def test_oauth_device_poll_handles_pending_and_denied(monkeypatch):
     result = oauth_device.poll_once("cid", "csecret", "dcode")
     assert result["status"] == "approved"
     assert result["refresh_token"] == "rt-123"
+
+
+# --------------------------------------------------------------------------- #
+# LLMRouter — multi-provider fallback chain (Groq -> Gemini -> Kimi(free) ->
+# OpenRouter -> DeepSeek -> Moonshot direct)
+# --------------------------------------------------------------------------- #
+def test_llm_router_skips_unconfigured_providers_silently(monkeypatch):
+    for env_var in ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+                     "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    from core.llm_router import LLMRouter
+
+    result = LLMRouter().generate("system", "user prompt")
+    assert result["error"] == "all_providers_failed"
+    # no_key should be silent -- attempts list should be empty, not full of noise
+    assert result["attempts"] == []
+
+
+def test_llm_router_tries_providers_in_order_and_returns_first_success(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("GROQ_API_KEY", "fake-groq-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    router = LLMRouter()
+    monkeypatch.setattr(router, "_call_groq", lambda s, u: "Hello from Groq!")
+    result = router.generate("system", "user")
+    assert result["provider"] == "groq"
+    assert result["text"] == "Hello from Groq!"
+
+
+def test_llm_router_falls_through_to_next_provider_on_failure(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("GROQ_API_KEY", "fake")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake")
+
+    router = LLMRouter()
+
+    def fail(s, u):
+        raise RuntimeError("rate_limited")
+
+    monkeypatch.setattr(router, "_call_groq", fail)
+    monkeypatch.setattr(router, "_call_gemini", lambda s, u: "Gemini answered")
+    result = router.generate("system", "user", order=["groq", "gemini"])
+    assert result["provider"] == "gemini"
+    assert result["text"] == "Gemini answered"
+
+
+def test_llm_router_generate_json_parses_valid_json(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    router = LLMRouter()
+    monkeypatch.setattr(router, "generate", lambda s, u, order=None: {
+        "text": '```json\n[{"a": 1}]\n```', "provider": "fake"
+    })
+    result = router.generate_json("s", "u")
+    assert result["data"] == [{"a": 1}]
+
+
+def test_llm_router_generate_json_reports_parse_failure(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    router = LLMRouter()
+    monkeypatch.setattr(router, "generate", lambda s, u, order=None: {
+        "text": "not valid json at all", "provider": "fake"
+    })
+    result = router.generate_json("s", "u")
+    assert "error" in result
+
+
+# --------------------------------------------------------------------------- #
+# ScriptWriter with LLMRouter-based generation + competitor insights
+# --------------------------------------------------------------------------- #
+def test_script_writer_uses_fallback_when_all_providers_fail(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    monkeypatch.setattr(writer.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
+    script = writer.write_script("Test Topic", "Psychology", "en", target_minutes=1)
+    assert script["engine"] == "fallback_template"
+    assert len(script["scenes"]) > 0
+
+
+def test_script_writer_uses_llm_result_when_available(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    fake_scenes = [{"text": "Hook line.", "query": "dramatic scene"},
+                   {"text": "Body line.", "query": "office desk"}]
+    monkeypatch.setattr(
+        writer.router, "generate_json",
+        lambda s, u, order=None: {"data": fake_scenes, "provider": "groq"},
+    )
+    script = writer.write_script("Test Topic", "Finance", "en", target_minutes=1)
+    assert script["engine"] == "groq"
+    assert script["scenes"] == fake_scenes
+
+
+def test_script_writer_passes_competitor_insights_into_prompt(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    captured = {}
+
+    def fake_generate_json(system_prompt, user_prompt, order=None):
+        captured["user_prompt"] = user_prompt
+        return {"error": "all_providers_failed"}
+
+    monkeypatch.setattr(writer.router, "generate_json", fake_generate_json)
+    writer.write_script("Test Topic", "True Crime", "en", target_minutes=1,
+                         competitor_insights="Use short punchy hooks with numbers.")
+    assert "Use short punchy hooks with numbers." in captured["user_prompt"]
+
+
+# --------------------------------------------------------------------------- #
+# CompetitorAnalyzer — degrades cleanly without a YouTube API key
+# --------------------------------------------------------------------------- #
+def test_competitor_analyzer_returns_empty_without_api_key(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
+    from core.competitor_analyzer import CompetitorAnalyzer
+
+    result = CompetitorAnalyzer().analyze("Finance & Wealth Building", ["stock market"])
+    assert result == ""
+
+
+def test_competitor_analyzer_summarizes_top_videos(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "fake-key")
+    from core.competitor_analyzer import CompetitorAnalyzer
+
+    analyzer = CompetitorAnalyzer()
+    monkeypatch.setattr(analyzer, "_search_top_videos", lambda query, max_results=6: [
+        {"title": "5 Money Mistakes That Keep You Poor", "views": 5_000_000, "likes": 200_000, "comments": 1000},
+    ])
+    monkeypatch.setattr(analyzer.router, "generate", lambda s, u: {
+        "text": "- Uses numbered list hooks\n- Direct, confrontational tone", "provider": "groq"
+    })
+    result = analyzer.analyze("Finance & Wealth Building", ["stock market"])
+    assert "numbered list hooks" in result
+
+
+# --------------------------------------------------------------------------- #
+# ThumbnailMaker — real PIL rendering, no AI image generation needed
+# --------------------------------------------------------------------------- #
+def test_thumbnail_maker_produces_real_jpeg(workdir):
+    from PIL import Image
+    from core.thumbnail_maker import ThumbnailMaker
+
+    Image.new("RGB", (640, 360), (40, 40, 80)).save("assets/footage/bg.jpg")
+    scenes = [{"clip": {"path": "assets/footage/bg.jpg", "type": "image"}}]
+
+    maker = ThumbnailMaker()
+    result = maker.make_thumbnail("The Cold Case That Took 50 Years To Solve", scenes, "en")
+
+    assert "path" in result
+    assert os.path.exists(result["path"])
+    img = Image.open(result["path"])
+    assert img.size == (1280, 720)
+
+
+def test_thumbnail_maker_handles_missing_background_gracefully(workdir):
+    from core.thumbnail_maker import ThumbnailMaker
+
+    maker = ThumbnailMaker()
+    result = maker.make_thumbnail("A Topic With No Footage", [{"clip": {}}], "en")
+    assert "path" in result
+    assert os.path.exists(result["path"])
+
+
+def test_thumbnail_maker_shortens_long_headlines():
+    from core.thumbnail_maker import _shorten_headline
+
+    short = _shorten_headline("This is a very long topic title with way too many words", "en", max_words=5)
+    assert len(short.split()) == 5
+    assert short == short.upper()
+
+
+# --------------------------------------------------------------------------- #
+# ShortsMaker — hook-moment selection (LLM + heuristic fallback) and clean
+# error handling without a real video/ffmpeg call
+# --------------------------------------------------------------------------- #
+def test_shorts_maker_heuristic_fallback_when_llm_unavailable(monkeypatch):
+    from core.shorts_maker import ShortsMaker
+
+    maker = ShortsMaker()
+    monkeypatch.setattr(maker.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
+
+    scenes = [{"text": f"Scene {i}"} for i in range(8)]
+    picks = maker._pick_hook_moments(scenes, num_clips=2)
+    assert len(picks) == 2
+    for p in picks:
+        assert 0 <= p["start_scene"] <= p["end_scene"] < len(scenes)
+
+
+def test_shorts_maker_uses_llm_picks_when_valid(monkeypatch):
+    from core.shorts_maker import ShortsMaker
+
+    maker = ShortsMaker()
+    monkeypatch.setattr(maker.router, "generate_json", lambda s, u, order=None: {
+        "data": [{"start_scene": 0, "end_scene": 1, "reason": "strong hook"}],
+        "provider": "groq",
+    })
+    scenes = [{"text": "a"}, {"text": "b"}, {"text": "c"}]
+    picks = maker._pick_hook_moments(scenes, num_clips=1)
+    assert picks == [{"start_scene": 0, "end_scene": 1, "reason": "strong hook"}]
+
+
+def test_shorts_maker_returns_empty_for_missing_video(workdir):
+    from core.shorts_maker import ShortsMaker
+
+    maker = ShortsMaker()
+    result = maker.make_shorts("does_not_exist.mp4", [{"text": "a"}], [{"start": 0, "end": 1, "text": "a"}], "a")
+    assert result == []
+
+
+def test_shorts_maker_scene_time_range_maps_correctly():
+    from core.shorts_maker import ShortsMaker
+
+    maker = ShortsMaker()
+    scenes = [{"text": "one two"}, {"text": "three four five"}, {"text": "six"}]
+    words = [
+        {"text": "one", "start": 0.0, "end": 0.5}, {"text": "two", "start": 0.5, "end": 1.0},
+        {"text": "three", "start": 1.0, "end": 1.5}, {"text": "four", "start": 1.5, "end": 2.0},
+        {"text": "five", "start": 2.0, "end": 2.5}, {"text": "six", "start": 2.5, "end": 3.0},
+    ]
+    start, end = maker._scene_time_range(1, 2, scenes, words, "one two three four five six")
+    assert start == 1.0
+    assert end == 3.0
+
+
+# --------------------------------------------------------------------------- #
+# AutoPublisher — thumbnail-set path (clean errors, never breaks the upload)
+# --------------------------------------------------------------------------- #
+def test_auto_publisher_set_thumbnail_missing_google_libs_handled(workdir):
+    from core.auto_publisher import AutoPublisher
+
+    class FakeService:
+        def thumbnails(self):
+            raise RuntimeError("network down")
+
+    with open("output/thumb.jpg", "wb") as f:
+        f.write(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    publisher = AutoPublisher()
+    result = publisher.set_thumbnail(FakeService(), "vid123", "output/thumb.jpg")
+    assert "error" in result

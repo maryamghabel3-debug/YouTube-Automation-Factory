@@ -1,33 +1,56 @@
 """VideoFactory Engine — the real pipeline (no mocks).
 
-topic -> ScriptWriter -> VoiceEngine -> StockFootageFetcher -> VideoAssembler
+topic -> CompetitorAnalyzer -> ScriptWriter -> VoiceEngine ->
+StockFootageFetcher -> VideoAssembler -> ThumbnailMaker -> ShortsMaker
 """
 
 from datetime import datetime
 
+from .competitor_analyzer import CompetitorAnalyzer
 from .script_writer import ScriptWriter
 from .voice_engine import VoiceEngine
 from .stock_footage_fetcher import StockFootageFetcher
 from .video_assembler import VideoAssembler
+from .thumbnail_maker import ThumbnailMaker
+from .shorts_maker import ShortsMaker
+from . import content_config as cfg
 
 
 class VideoFactory:
     def __init__(self):
         self.name = "VideoFactory"
+        self.competitor_analyzer = CompetitorAnalyzer()
         self.script_writer = ScriptWriter()
         self.voice_engine = VoiceEngine()
         self.footage_fetcher = StockFootageFetcher()
         self.assembler = VideoAssembler()
+        self.thumbnail_maker = ThumbnailMaker()
+        self.shorts_maker = ShortsMaker()
 
-    def build_video(self, topic: str, channel_cfg: dict, target_minutes: int = 8) -> dict:
+    def build_video(self, topic: str, channel_cfg: dict, target_minutes: int = 8,
+                     make_shorts: bool = True) -> dict:
         """Full real pipeline for one channel/topic. Returns
-        {'video_path', 'duration', 'script', ...} or {'error': ...}."""
+        {'video_path', 'duration', 'thumbnail_path', 'shorts': [...], ...}
+        or {'error': ...}."""
         language = channel_cfg.get("language", "en")
+        niche_key = channel_cfg.get("niche_key", "")
         niche_label = channel_cfg.get("niche_label", "")
         voice = channel_cfg.get("voice", "en-US-ChristopherNeural")
 
+        # --- Competitor/viral-pattern analysis (see docs on RPM/high-view
+        # strategy) -- informs the script's hook/pacing without copying any
+        # specific video's content. Degrades silently to '' if no
+        # YOUTUBE_API_KEY or every LLM provider is unavailable.
+        search_terms = cfg.NICHES.get(niche_key, {}).get("search_terms", [])
+        print(f"[{self.name}] Analyzing high-performing videos in this niche for patterns")
+        competitor_insights = self.competitor_analyzer.analyze(niche_label, search_terms)
+        if competitor_insights:
+            print(f"[{self.name}] Competitor insights: {competitor_insights[:150]}...")
+
         print(f"[{self.name}] Writing script for '{topic}' ({niche_label}, {language})")
-        script = self.script_writer.write_script(topic, niche_label, language, target_minutes)
+        script = self.script_writer.write_script(
+            topic, niche_label, language, target_minutes, competitor_insights
+        )
         if not script.get("scenes"):
             return {"error": "script_generation_failed"}
 
@@ -50,12 +73,29 @@ class VideoFactory:
         if video_result.get("error"):
             return video_result
 
+        print(f"[{self.name}] Generating thumbnail")
+        thumb_result = self.thumbnail_maker.make_thumbnail(topic, scenes_with_clips, language)
+        thumbnail_path = thumb_result.get("path", "")
+        if thumb_result.get("error"):
+            print(f"[{self.name}] Thumbnail generation failed (non-fatal): {thumb_result['error']}")
+
+        shorts = []
+        if make_shorts:
+            print(f"[{self.name}] Generating Shorts/Reels clips from this video")
+            shorts = self.shorts_maker.make_shorts(
+                video_result["video_path"], script["scenes"], voice_result["words"],
+                script["full_text"], num_clips=3, topic=topic,
+            )
+
         return {
             "video_path": video_result["video_path"],
             "duration": video_result["duration"],
             "scenes_rendered": video_result["scenes_rendered"],
+            "thumbnail_path": thumbnail_path,
+            "shorts": shorts,
             "topic": topic,
             "script_engine": script["engine"],
+            "competitor_insights": competitor_insights,
             "built_at": datetime.now().isoformat(),
         }
 
@@ -66,8 +106,9 @@ if __name__ == "__main__":
     factory = VideoFactory()
     demo_channel = {
         "language": "en",
+        "niche_key": "psychology",
         "niche_label": "Psychology & Self-Improvement",
         "voice": "en-US-ChristopherNeural",
     }
     result = factory.build_video("why we procrastinate", demo_channel, target_minutes=1)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in result.items() if k != "shorts"}, indent=2, ensure_ascii=False))

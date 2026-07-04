@@ -3,11 +3,14 @@
 
 Loops through every active channel in channels/database.json, finds a real
 trending topic, builds a real narrated+subtitled video from free stock
-footage, and uploads it to the real YouTube channel via OAuth2.
+footage (informed by a competitor/high-view-pattern analysis), generates a
+thumbnail and 2-3 Shorts clips, and uploads everything to the real YouTube
+channel via OAuth2.
 
 Env vars:
   SKIP_UPLOAD=1          Build videos without uploading to YouTube (testing).
   TARGET_MINUTES=8       Narration length target per video.
+  MAKE_SHORTS=1          Auto-generate 2-3 vertical Shorts per video (default on).
   ONLY_CHANNEL=<id>      Process just this one channel (used by the
                          Telegram bot's "make a video now" / "test channel"
                          commands so the user doesn't have to wait for
@@ -43,6 +46,29 @@ def load_channels() -> list:
         return json.load(f).get("channels", [])
 
 
+def _send_telegram_file(path: str, channel_name: str, caption_prefix: str, kind: str) -> bool:
+    """kind: 'video' or 'photo'. Returns True if sent successfully."""
+    import requests
+    token = os.environ.get("TELEGRAM_BOT_TOKEN_FACTORY", "")
+    chat_id = telegram_notify._chat_id()
+    if not (token and chat_id and os.path.exists(path)):
+        return False
+    method = "sendVideo" if kind == "video" else "sendPhoto"
+    field = "video" if kind == "video" else "photo"
+    try:
+        with open(path, "rb") as f:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/{method}",
+                data={"chat_id": chat_id, "caption": f"{caption_prefix} {channel_name}"[:1000]},
+                files={field: f},
+                timeout=180,
+            )
+        return bool(r.json().get("ok"))
+    except Exception as e:
+        print(f"[deliver] Telegram {method} error: {e}")
+        return False
+
+
 def _deliver_video(video_path: str, channel_name: str, topic: str, mode: str) -> str:
     """Sends/uploads the finished video per DELIVER_MODE and returns a
     human-readable string describing where to find it (used in the Telegram
@@ -52,27 +78,11 @@ def _deliver_video(video_path: str, channel_name: str, topic: str, mode: str) ->
 
     sent_via_telegram = False
     if mode in ("telegram", "both") and size and size <= _TELEGRAM_FILE_LIMIT:
-        import requests
-        token = os.environ.get("TELEGRAM_BOT_TOKEN_FACTORY", "")
-        chat_id = telegram_notify._chat_id()
-        if token and chat_id:
-            try:
-                with open(video_path, "rb") as f:
-                    r = requests.post(
-                        f"https://api.telegram.org/bot{token}/sendVideo",
-                        data={"chat_id": chat_id, "caption": f"🎬 {channel_name}: {topic}"[:1000]},
-                        files={"video": f},
-                        timeout=180,
-                    )
-                if r.json().get("ok"):
-                    sent_via_telegram = True
-                    lines.append("📲 مستقیم توی تلگرام ارسال شد")
-                else:
-                    print(f"[deliver] Telegram sendVideo failed: {r.text[:300]}")
-            except Exception as e:
-                print(f"[deliver] Telegram sendVideo error: {e}")
+        if _send_telegram_file(video_path, channel_name, "🎬", "video"):
+            sent_via_telegram = True
+            lines.append("📲 مستقیم توی تلگرام ارسال شد")
         else:
-            print("[deliver] Telegram not configured (TELEGRAM_BOT_TOKEN_FACTORY / chat id missing)")
+            print("[deliver] Telegram sendVideo failed or not configured")
     elif mode in ("telegram", "both") and size > _TELEGRAM_FILE_LIMIT:
         lines.append(f"📦 حجم فایل ({size / 1e6:.0f}MB) برای تلگرام زیاده — از لینک گیت‌هاب استفاده می‌کنیم")
 
@@ -110,6 +120,7 @@ def run_factory():
     skip_upload = os.environ.get("SKIP_UPLOAD") == "1"
     target_minutes = int(os.environ.get("TARGET_MINUTES", "8"))
     deliver_mode = os.environ.get("DELIVER_MODE", "both")
+    make_shorts = os.environ.get("MAKE_SHORTS", "1") == "1"
 
     analyzer = NicheAnalyzer()
     factory = VideoFactory()
@@ -125,7 +136,9 @@ def run_factory():
         print("-" * 50)
 
         topic = analyzer.analyze_market(ch["niche_key"])
-        video_result = factory.build_video(topic, ch, target_minutes=target_minutes)
+        video_result = factory.build_video(
+            topic, ch, target_minutes=target_minutes, make_shorts=make_shorts
+        )
 
         if video_result.get("error"):
             print(f"❌ Video build failed for {ch['name']}: {video_result['error']}")
@@ -135,12 +148,36 @@ def run_factory():
         print(f"✅ Video built: {video_result['video_path']} "
               f"({video_result['duration']:.1f}s, {video_result['scenes_rendered']} scenes)")
 
+        thumbnail_path = video_result.get("thumbnail_path", "")
+        shorts = video_result.get("shorts", [])
+
         deliver_summary = _deliver_video(video_result["video_path"], ch["name"], topic, deliver_mode)
+
+        # Thumbnail preview: always sent via Telegram when possible (tiny file)
+        if thumbnail_path and os.path.exists(thumbnail_path):
+            _send_telegram_file(thumbnail_path, ch["name"], "🖼 تامبنیل", "photo")
+
+        # Shorts: sent via Telegram if small enough, else linked via Release
+        shorts_lines = []
+        for i, short in enumerate(shorts, 1):
+            short_size = os.path.getsize(short["path"]) if os.path.exists(short["path"]) else 0
+            if short_size and short_size <= _TELEGRAM_FILE_LIMIT:
+                if _send_telegram_file(short["path"], ch["name"], f"🎞 Short {i}:", "video"):
+                    shorts_lines.append(f"🎞 Short {i}: ارسال شد در تلگرام")
+                    continue
+            rel = GitHubRelease().publish_video(
+                short["path"], title=f"{ch['name']} Short {i} — {topic}",
+                body=f"Auto-generated Short clip.\nChannel: {ch['name']}\nTopic: {topic}",
+            )
+            if rel.get("ok"):
+                shorts_lines.append(f"🎞 Short {i}: {rel['url']}")
 
         upload_line = ""
         if not skip_upload:
             metadata = publisher.generate_metadata(topic, ch.get("niche_label", ""), ch["language"])
-            upload_result = publisher.upload_to_youtube(ch, video_result["video_path"], metadata)
+            upload_result = publisher.upload_to_youtube(
+                ch, video_result["video_path"], metadata, thumbnail_path=thumbnail_path
+            )
             if upload_result.get("error"):
                 print(f"⚠️  Upload skipped/failed for {ch['name']}: {upload_result['error']}")
                 upload_line = f"\n⚠️ آپلود خودکار یوتیوب: {upload_result['error']}"
@@ -148,15 +185,19 @@ def run_factory():
                 perf.log_upload(ch["id"], topic, upload_result["video_id"], upload_result["url"])
                 print(f"🎉 Channel {ch['name']} updated successfully! {upload_result['url']}")
                 upload_line = f"\n📺 آپلود شد روی یوتیوب: {upload_result['url']}"
+                if upload_result.get("thumbnail_warning"):
+                    upload_line += f"\n⚠️ تامبنیل ست نشد: {upload_result['thumbnail_warning']}"
         else:
             upload_line = "\n⏭️ SKIP_UPLOAD=1 — روی یوتیوب آپلود نشد (فقط تست ساخت)"
+
+        shorts_block = ("\n\n" + "\n".join(shorts_lines)) if shorts_lines else ""
 
         telegram_notify.send(
             f"✅ *ویدیوی جدید ساخته شد!*\n\n"
             f"📺 کانال: {ch['name']}\n"
             f"📝 موضوع: {topic}\n"
             f"⏱ مدت: {video_result['duration']:.0f} ثانیه\n\n"
-            f"{deliver_summary}{upload_line}"
+            f"{deliver_summary}{shorts_block}{upload_line}"
         )
 
 

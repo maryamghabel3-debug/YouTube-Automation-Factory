@@ -10,15 +10,20 @@
 
 | جزء | وضعیت |
 |---|---|
-| 🔍 NicheAnalyzer | ✅ موضوعات واقعی از Reddit + فیلتر امنیتی محتوای حساس |
-| ✍️ ScriptWriter | ✅ اسکریپت اصیل با Gemini (+ fallback آفلاین) |
+| 🔍 NicheAnalyzer | ✅ موضوعات واقعی از Reddit + Google Trends + فیلتر امنیتی محتوای حساس |
+| 🏆 CompetitorAnalyzer | ✅ تحلیل ویدیوهای واقعاً پربازدید همین نیچ قبل از نوشتن اسکریپت (الگوی هوک/ریتم، نه کپی محتوا) |
+| ✍️ ScriptWriter | ✅ اسکریپت اصیل با زنجیره‌ی ۶ ارائه‌دهنده‌ی هوش مصنوعی رایگان (Groq/Gemini/Kimi K2/OpenRouter/DeepSeek/Moonshot، هرکدوم موجود بود) + fallback آفلاین |
 | 🗣 VoiceEngine | ✅ صدای واقعی با edge-tts + زمان‌بندی دقیق کلمه‌به‌کلمه |
 | 🎥 StockFootageFetcher | ✅ فوتیج/عکس واقعی از Pexels/Pixabay (رایگان، مجاز تجاری) |
 | 🎞 VideoAssembler | ✅ رندر واقعی با FFmpeg: افکت Ken Burns + زیرنویس حک‌شده + میکس صدا |
-| 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) |
+| 🖼 ThumbnailMaker | ✅ کاور واقعی ۱۲۸۰×۷۲۰ از فریم فوتیج + متن پرکنتراست (بدون نیاز به AI تصویر) |
+| 🎞 ShortsMaker | ✅ تولید خودکار ۲-۳ کلیپ Shorts عمودی از هر ویدیوی بلند (بر اساس تشخیص هوک با AI) |
+| 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) + ست‌کردن تامبنیل سفارشی |
 | 📊 PerformanceAnalyzer | ✅ آمار واقعی بازدید/لایک از YouTube API |
 
-همه با **۲۹ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts) است.
+همه با **۴۷ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts + تولید تامبنیل و Shorts) است.
+
+جزئیات بیشتر: `docs/HIGH-VIEW-STRATEGY.md` (تحلیل رقبا/تامبنیل/Shorts) و `docs/LLM-PROVIDERS-2026.md` (زنجیره‌ی ارائه‌دهنده‌های هوش مصنوعی رایگان).
 
 ## 💰 هزینه: تقریباً $۰ در ماه
 تمام سرویس‌های استفاده‌شده رایگان و بدون نیاز به کارت بانکی بین‌المللی هستند (فقط ثبت‌نام ایمیلی).

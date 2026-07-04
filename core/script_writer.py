@@ -1,36 +1,54 @@
 """ScriptWriter Agent — generates a real, original long-form narration script
-broken into timed scenes, using Gemini (falls back to a template so the
-pipeline never crashes without a key).
+broken into timed scenes, using a multi-provider LLM fallback chain (see
+core/llm_router.py: Groq -> Gemini -> Kimi K2 (free via OpenRouter) ->
+OpenRouter -> DeepSeek -> Moonshot direct) so a single provider's exhausted
+quota never stops content production. Falls back to an offline template if
+every provider is unavailable/unconfigured, so the pipeline never crashes.
 
 Each scene has: {"text": narration line, "query": stock-footage search term}
 so StockFootageFetcher can fetch relevant b-roll for every beat of the video.
+
+Optionally takes a `competitor_insights` string (see core/competitor_analyzer.py)
+summarizing what made recently-trending videos in this niche successful --
+the writer is instructed to apply those patterns (stronger hooks, pacing,
+structure) without copying any specific video's content.
 """
 
 import os
-import json
-import re
+
+from .llm_router import LLMRouter
 
 
 class ScriptWriter:
     def __init__(self):
-        self.api_key = os.environ.get("GEMINI_API_KEY", "")
+        self.router = LLMRouter()
 
-    def _gemini_script(self, topic: str, niche_label: str, language: str, target_minutes: int) -> list:
-        if not self.api_key:
-            return []
-        try:
-            import google.generativeai as genai
+    def _build_prompt(self, topic: str, niche_label: str, language: str,
+                       target_minutes: int, competitor_insights: str = "") -> tuple:
+        lang_name = "Persian (Farsi)" if language == "fa" else "English" if language == "en" else language
 
-            genai.configure(api_key=self.api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+        system_prompt = (
+            "You are a professional scriptwriter for a faceless YouTube documentary "
+            "channel. You write ORIGINAL, engaging, factually-grounded narration scripts. "
+            "You never copy or closely paraphrase any specific existing video -- you only "
+            "apply general storytelling patterns (hook style, pacing, structure) that are "
+            "known to perform well."
+        )
 
-            lang_name = "Persian (Farsi)" if language == "fa" else "English"
-            prompt = f"""You are a professional scriptwriter for a faceless YouTube documentary channel
-about "{niche_label}". Write an ORIGINAL, engaging, factually-grounded narration script
-in {lang_name} about: "{topic}".
+        insights_block = ""
+        if competitor_insights:
+            insights_block = (
+                f"\n\nHere is a summary of what makes currently high-performing videos in "
+                f"this niche successful (use these PATTERNS as inspiration for hook/pacing/"
+                f"structure, but do NOT copy any specific facts, phrasing, or claims from "
+                f"them):\n{competitor_insights}\n"
+            )
 
+        user_prompt = f"""Write an ORIGINAL, engaging, factually-grounded narration script
+in {lang_name} for a "{niche_label}" channel about: "{topic}".
+{insights_block}
 Target length: about {target_minutes} minutes of spoken narration (~{target_minutes * 130} words).
-Structure: a strong hook (first line grabs attention), then body broken into
+Structure: a strong hook (first line grabs attention within 3 seconds), then body broken into
 8-14 short scenes, then a call-to-action outro (subscribe).
 
 Respond ONLY with a JSON array, each item shaped exactly like:
@@ -39,16 +57,19 @@ Respond ONLY with a JSON array, each item shaped exactly like:
 The "query" field must ALWAYS be in English (for stock footage search), even
 if "text" is in {lang_name}. Do not include markdown fences, only the JSON array."""
 
-            resp = model.generate_content(prompt)
-            raw = resp.text.strip()
-            # Strip markdown code fences if the model added them anyway
-            raw = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-            scenes = json.loads(raw)
-            if isinstance(scenes, list) and scenes:
-                return scenes
-        except Exception as e:
-            print(f"[ScriptWriter] Gemini generation failed, using fallback: {e}")
-        return []
+        return system_prompt, user_prompt
+
+    def _llm_script(self, topic: str, niche_label: str, language: str,
+                     target_minutes: int, competitor_insights: str = "") -> tuple:
+        system_prompt, user_prompt = self._build_prompt(
+            topic, niche_label, language, target_minutes, competitor_insights
+        )
+        result = self.router.generate_json(system_prompt, user_prompt)
+        if "data" in result and isinstance(result["data"], list) and result["data"]:
+            return result["data"], result["provider"]
+        if "error" in result:
+            print(f"[ScriptWriter] All LLM providers failed, using fallback: {result['error']}")
+        return [], ""
 
     def _fallback_script(self, topic: str, language: str) -> list:
         """Offline-safe template so the pipeline always produces something."""
@@ -69,9 +90,9 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
         ]
 
     def write_script(self, topic: str, niche_label: str = "", language: str = "en",
-                      target_minutes: int = 8) -> dict:
-        scenes = self._gemini_script(topic, niche_label, language, target_minutes)
-        engine = "gemini"
+                      target_minutes: int = 8, competitor_insights: str = "") -> dict:
+        scenes, provider = self._llm_script(topic, niche_label, language, target_minutes, competitor_insights)
+        engine = provider or "fallback_template"
         if not scenes:
             scenes = self._fallback_script(topic, language)
             engine = "fallback_template"
@@ -87,6 +108,8 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
 
 
 if __name__ == "__main__":
+    import json
+
     writer = ScriptWriter()
     script = writer.write_script("why we procrastinate", "Psychology", "en", target_minutes=3)
     print(json.dumps(script, indent=2, ensure_ascii=False))

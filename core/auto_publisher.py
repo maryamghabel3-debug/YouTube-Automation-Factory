@@ -94,9 +94,14 @@ class AutoPublisher:
         tags = [niche_label, "documentary", "educational"] if niche_label else ["educational"]
         return {"title": title[:100], "description": description[:5000], "tags": tags}
 
-    def upload_to_youtube(self, channel_cfg: dict, video_path: str, metadata: dict) -> dict:
+    def upload_to_youtube(self, channel_cfg: dict, video_path: str, metadata: dict,
+                           thumbnail_path: str = "") -> dict:
         """Real upload via videos.insert. Returns {'url': ...} on success or
-        {'error': ...} on failure — never raises, never fakes success."""
+        {'error': ...} on failure — never raises, never fakes success.
+        If thumbnail_path is given (see core/thumbnail_maker.py), it's set
+        as the video's custom thumbnail right after upload succeeds; a
+        failed thumbnail set is logged but never turns a successful video
+        upload into an overall failure."""
         if not video_path or not os.path.exists(video_path):
             return {"error": "video_file_missing"}
 
@@ -129,12 +134,38 @@ class AutoPublisher:
             video_id = response.get("id")
             url = f"https://youtube.com/watch?v={video_id}"
             print(f"[{self.name}] Upload complete: {url}")
-            return {"video_id": video_id, "url": url}
+
+            thumb_result = {}
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                thumb_result = self.set_thumbnail(service, video_id, thumbnail_path)
+
+            result = {"video_id": video_id, "url": url}
+            if thumb_result.get("error"):
+                result["thumbnail_warning"] = thumb_result["error"]
+            return result
         except HttpError as e:
             print(f"[{self.name}] YouTube API error: {e}")
             return {"error": f"http_error: {e}"}
         except Exception as e:
             print(f"[{self.name}] Unexpected upload error: {e}")
+            return {"error": str(e)}
+
+    def set_thumbnail(self, service, video_id: str, thumbnail_path: str) -> dict:
+        """Uploads a custom thumbnail (see core/thumbnail_maker.py) for an
+        already-uploaded video via thumbnails().set(). Note: YouTube only
+        allows custom thumbnails for channels in good standing with phone
+        verification -- if that's not yet done, this call returns a clean
+        error instead of crashing the whole upload."""
+        try:
+            media = MediaFileUpload(thumbnail_path, mimetype="image/jpeg")
+            service.thumbnails().set(videoId=video_id, media_body=media).execute()
+            print(f"[{self.name}] Custom thumbnail set for {video_id}")
+            return {"ok": True}
+        except HttpError as e:
+            print(f"[{self.name}] Thumbnail upload failed (video itself still succeeded): {e}")
+            return {"error": f"thumbnail_http_error: {e}"}
+        except Exception as e:
+            print(f"[{self.name}] Thumbnail upload error: {e}")
             return {"error": str(e)}
 
 
