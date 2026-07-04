@@ -12,6 +12,19 @@
       "refresh_token_env": "YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN",
       "upload_frequency": "weekly",
       "active": true
+    },
+    {
+      "id": "true_crime_fa_test",
+      "name": "PerondehYab",
+      "niche_key": "true_crime",
+      "niche_label": "جنایی و رمزآلود",
+      "rpm_estimate": "$7-12",
+      "language": "fa",
+      "voice": "fa-IR-FaridNeural",
+      "category_id": "22",
+      "refresh_token_env": "YOUTUBE_REFRESH_TOKEN_TRUE_CRIME_FA_TEST",
+      "upload_frequency": "weekly",
+      "active": true
     }
   ]
 }
