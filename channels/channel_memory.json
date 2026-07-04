@@ -59,6 +59,28 @@
       "video_id": "",
       "video_url": "",
       "created_at": "2026-07-04T20:06:50.434803+00:00"
+    },
+    {
+      "topic": "How billionaires actually spend their mornings",
+      "title": "How billionaires actually spend their mornings",
+      "video_path": "output/video_1783196053587.mp4",
+      "footage_queries": [
+        "fine dining",
+        "reading newspaper morning",
+        "city skyline night",
+        "penthouse view",
+        "luxury car",
+        "watch closeup",
+        "city skyline night",
+        "champagne pour",
+        "designer fashion",
+        "sunset silhouette",
+        "fine dining"
+      ],
+      "script_engine": "content_bank",
+      "video_id": "",
+      "video_url": "",
+      "created_at": "2026-07-04T20:17:34.554927+00:00"
     }
   ]
 }
