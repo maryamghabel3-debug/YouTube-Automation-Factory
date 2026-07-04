@@ -140,6 +140,28 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
             if scenes:
                 engine = "content_bank"
 
+        if not scenes and niche_key:
+            # The topic NicheAnalyzer picked has no exact curated script AND
+            # every LLM failed (this happens for a raw live-trending topic
+            # slipping through, or an evergreen topic outside the curated
+            # set). Rather than settle for the generic placeholder built
+            # around a topic we can't actually write anything good about,
+            # swap to a DIFFERENT topic we know has a real, good,
+            # fact-checked script -- a genuinely good video about a slightly
+            # different (but still real, still niche-appropriate) topic beats
+            # a mediocre 5-line video about the "correct" topic. The caller
+            # (VideoFactory) is told about this via the returned "topic" key
+            # so title/description/memory all stay consistent with what was
+            # actually narrated.
+            substitute_topic = content_bank.random_topic_for_niche(niche_key, language)
+            if substitute_topic:
+                scenes = content_bank.get_script(niche_key, language, substitute_topic)
+                if scenes:
+                    print(f"[ScriptWriter] No LLM and no curated script for '{topic}' -- "
+                          f"substituting curated topic '{substitute_topic}' instead.")
+                    topic = substitute_topic
+                    engine = "content_bank"
+
         if not scenes:
             scenes = self._fallback_script(topic, language)
             engine = "fallback_template"

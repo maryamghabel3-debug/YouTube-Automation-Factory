@@ -738,14 +738,37 @@ def test_script_writer_uses_content_bank_when_llm_unavailable(monkeypatch):
     assert len(script["scenes"]) >= 8
 
 
-def test_script_writer_falls_back_past_content_bank_for_unknown_topic(monkeypatch):
+def test_script_writer_substitutes_curated_topic_when_original_has_no_script(monkeypatch):
+    """If the LLM fails AND the exact topic has no curated script, but the
+    niche DOES have other curated topics, ScriptWriter should substitute to
+    one of those (a genuinely good video about a different-but-real topic
+    beats a generic 5-line video about the "correct" topic) and report the
+    substituted topic back so callers use it for title/description/memory."""
     from core.script_writer import ScriptWriter
+    from core import content_bank as cb
 
     writer = ScriptWriter()
     monkeypatch.setattr(writer.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
     script = writer.write_script(
         "A totally made-up topic not in the content bank", "Psychology", "en",
         target_minutes=1, niche_key="psychology",
+    )
+    assert script["engine"] == "content_bank"
+    assert script["topic"] != "A totally made-up topic not in the content bank"
+    assert cb.has_script("psychology", "en", script["topic"])
+
+
+def test_script_writer_falls_back_to_generic_template_for_unknown_niche(monkeypatch):
+    """A niche_key with no content_bank entries at all (e.g. empty/unknown)
+    has nothing to substitute to, so it should still fall through to the
+    generic offline template rather than crash."""
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    monkeypatch.setattr(writer.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
+    script = writer.write_script(
+        "A totally made-up topic", "Some Niche", "en",
+        target_minutes=1, niche_key="nonexistent_niche_key",
     )
     assert script["engine"] == "fallback_template"
 

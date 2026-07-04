@@ -324,3 +324,17 @@ def available_topics(niche_key: str, language: str) -> list:
     topics when it has to fall back to the evergreen list (still a real
     evergreen topic either way; this only affects which ONE gets picked)."""
     return list(CONTENT_BANK.get(language, {}).get(niche_key, {}).keys())
+
+
+def random_topic_for_niche(niche_key: str, language: str):
+    """Returns one random curated topic for this niche/language, or None if
+    none exist. Used by ScriptWriter as a last-resort SUBSTITUTION: if the
+    live topic NicheAnalyzer picked (e.g. a raw Reddit post title) has no
+    exact curated script AND every LLM provider failed/is unconfigured, it's
+    better to swap to a topic we know has a real, good, fact-checked script
+    than to build a video around a generic 5-line placeholder for an
+    arbitrary, possibly-nonsensical raw topic string."""
+    import random
+    topics = available_topics(niche_key, language)
+    return random.choice(topics) if topics else None
+

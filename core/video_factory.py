@@ -57,6 +57,16 @@ class VideoFactory:
         if not script.get("scenes"):
             return {"error": "script_generation_failed"}
 
+        # ScriptWriter may have SUBSTITUTED the topic (see its docstring --
+        # this happens when the topic NicheAnalyzer picked has no curated
+        # content_bank script AND every LLM failed). Use whatever topic was
+        # actually narrated for everything downstream (thumbnail, title,
+        # memory record, description) so nothing references the original,
+        # unused topic string.
+        if script.get("topic") and script["topic"] != topic:
+            print(f"[{self.name}] Topic substituted by ScriptWriter: '{topic}' -> '{script['topic']}'")
+            topic = script["topic"]
+
         print(f"[{self.name}] Generating narration ({script['engine']} script, "
               f"{len(script['scenes'])} scenes)")
         voice_result = self.voice_engine.generate_voiceover(script["full_text"], voice)

@@ -170,6 +170,13 @@ def run_factory():
         print(f"✅ Video built: {video_result['video_path']} "
               f"({video_result['duration']:.1f}s, {video_result['scenes_rendered']} scenes)")
 
+        # VideoFactory/ScriptWriter may have SUBSTITUTED the topic (see
+        # core/content_bank.py's random_topic_for_niche -- happens when the
+        # topic NicheAnalyzer picked has no curated script AND every LLM
+        # failed). Use the ACTUAL topic that was narrated for everything
+        # downstream: delivery caption, YouTube title/description, memory.
+        topic = video_result.get("topic", topic)
+
         thumbnail_path = video_result.get("thumbnail_path", "")
         shorts = video_result.get("shorts", [])
 
