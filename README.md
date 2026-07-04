@@ -1,33 +1,72 @@
-# 🏭 YouTube Automation Factory (Future Project Architecture)
+# 🏭 YouTube Automation Factory
 
-This document outlines the architecture for our next GitHub project: a scalable, infinite-channel YouTube automation empire.
+سیستم واقعی (نه mock) برای ساخت خودکار ویدیوهای یوتیوب با فوتیج/عکس رایگان stock + روایت اصیل + صدای TTS + زیرنویس خودکار + آپلود خودکار.
 
-## 🧠 Core Philosophy
-Instead of hardcoding one persona (like Elina), this new project will be a **Factory Engine**. It will dynamically spawn new personas, niches, and video styles based on what is trending and profitable on YouTube right now.
+## 🎯 فلسفه
+به‌جای تولید کل ویدیو با هوش مصنوعی (که گرون و پرمحدودیت است)، این فکتوری از **فوتیج/عکس رایگان و مجاز-تجاری** (Pexels، Pixabay) به‌عنوان پس‌زمینه بصری یک **روایت اصیل و اصلی** استفاده می‌کند — دقیقاً همان روشی که بسیاری از کانال‌های فیس‌لس موفق یوتیوب استفاده می‌کنند.
 
-## 🛠️ The "Omni-Agents" Architecture
+## ✅ وضعیت: کاملاً کارکننده (نه اسکلت/بلوپرینت)
+هر جزء این پروژه **واقعاً اجرا می‌شود** و خروجی واقعی تولید می‌کند:
 
-### 1. NicheAnalyzer Agent (The Market Researcher)
-- **Role:** Continuously monitors YouTube API, Google Trends, and TikTok hashtags.
-- **Action:** Identifies high-RPM (Revenue Per Mille) and low-competition niches.
-- **Output:** Suggests new channels to create (e.g., "AI News is trending. Let's spawn a new channel called 'Daily AI Bytes'").
+| جزء | وضعیت |
+|---|---|
+| 🔍 NicheAnalyzer | ✅ موضوعات واقعی از Reddit + فیلتر امنیتی محتوای حساس |
+| ✍️ ScriptWriter | ✅ اسکریپت اصیل با Gemini (+ fallback آفلاین) |
+| 🗣 VoiceEngine | ✅ صدای واقعی با edge-tts + زمان‌بندی دقیق کلمه‌به‌کلمه |
+| 🎥 StockFootageFetcher | ✅ فوتیج/عکس واقعی از Pexels/Pixabay (رایگان، مجاز تجاری) |
+| 🎞 VideoAssembler | ✅ رندر واقعی با FFmpeg: افکت Ken Burns + زیرنویس حک‌شده + میکس صدا |
+| 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) |
+| 📊 PerformanceAnalyzer | ✅ آمار واقعی بازدید/لایک از YouTube API |
 
-### 2. PersonaGenerator Agent (The Casting Director)
-- **Role:** When a new channel is approved, this agent creates its entire identity in seconds.
-- **Action:** Generates a consistent 3D/Photorealistic avatar face, selects a voice (Edge-TTS or ElevenLabs), and creates a channel banner/logo.
+همه با **۱۷ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts) است.
 
-### 3. The Master VideoEngine (The Expert Filmmaker)
-This will be the most advanced module, routing requests to the best open-source models we discussed:
-- **Long-form Talking Head:** `LongCat-Video-Avatar` / `VideoReTalking`
-- **Faceless Documentary:** `OpenMontage` (combines B-Rolls from `HunyuanVideo` + script + subtitles).
-- **Infinite Lo-Fi Loops:** `CogVideoX-5B` + AI Music Generators.
+## 💰 هزینه: تقریباً $۰ در ماه
+تمام سرویس‌های استفاده‌شده رایگان و بدون نیاز به کارت بانکی بین‌المللی هستند (فقط ثبت‌نام ایمیلی).
 
-### 4. AutoPublisher & Analytics Agent
-- **Role:** Uploads videos via YouTube Data API V3.
-- **Action:** A/B tests thumbnails, writes SEO-optimized descriptions, and tracks which videos make the most money to inform the `NicheAnalyzer`.
+## 🚀 شروع سریع
 
-## 🌐 The Master Dashboard
-A Streamlit or React web app where you manage the empire:
-- **Fleet View:** See all active channels (e.g., Channel 1: Psychology, Channel 2: True Crime, Channel 3: Tech News).
-- **Revenue Tracker:** Estimated AdSense revenue across the fleet.
-- **One-Click Spawn:** "Create New Channel -> Niche: Space Exploration". The Factory does the rest.
+```bash
+pip install -r requirements.txt
+# ffmpeg باید نصب باشه: sudo apt-get install ffmpeg
+
+# ۱. یک کانال ثبت کن
+python core/channel_spawner.py
+
+# ۲. یک‌بار OAuth یوتیوب رو تنظیم کن (راهنما: docs/YOUTUBE-OAUTH-SETUP.md)
+python scripts/setup_youtube_oauth.py
+
+# ۳. فکتوری رو اجرا کن (بدون آپلود، فقط تست ساخت ویدیو)
+SKIP_UPLOAD=1 TARGET_MINUTES=2 python main.py
+
+# ۴. اجرای کامل با آپلود واقعی
+python main.py
+```
+
+برای اجرای خودکار روزانه، ورک‌فلوی `.github/workflows/run-factory.yml` رو با کلیدهای لازم در GitHub Secrets فعال کنید — راهنمای کامل در `docs/YOUTUBE-OAUTH-SETUP.md`.
+
+## 🗂 ساختار
+
+```
+YouTube-Automation-Factory/
+├── main.py                        ← ارکستریتور اصلی (The CEO)
+├── core/
+│   ├── content_config.py          ← نیچ‌ها، صداها، تنظیمات مشترک
+│   ├── niche_analyzer.py          ← موضوع‌یابی واقعی (Reddit) + فیلتر امنیتی
+│   ├── script_writer.py           ← اسکریپت‌نویسی با Gemini
+│   ├── voice_engine.py            ← صدا با edge-tts + زمان‌بندی کلمه
+│   ├── stock_footage_fetcher.py   ← فوتیج/عکس از Pexels/Pixabay
+│   ├── video_assembler.py         ← رندر نهایی با FFmpeg
+│   ├── video_factory.py           ← اتصال همه اجزا به هم
+│   ├── channel_spawner.py         ← ثبت کانال جدید
+│   ├── auto_publisher.py          ← آپلود واقعی به یوتیوب (OAuth2)
+│   └── performance_analyzer.py    ← آمار واقعی بازدید/عملکرد
+├── channels/database.json         ← دیتابیس کانال‌های فعال
+├── scripts/setup_youtube_oauth.py ← تنظیم یک‌بار OAuth برای هر کانال
+├── docs/YOUTUBE-OAUTH-SETUP.md    ← راهنمای کامل قدم‌به‌قدم
+└── tests/test_factory.py          ← ۱۷ تست خودکار (شامل end-to-end واقعی)
+```
+
+## 📄 اسناد بیشتر
+- `GAZARESH-BARRASI-CHETOR-EJRA-KONIM.md` — گزارش بررسی نسخه اولیه (بلوپرینت mock)
+- `PLAN-VIDEO-BA-FOOTAGE-AMADEH.md` — استراتژی کلی و تحقیق بازار (RPM نیچ‌ها، منابع فوتیج، قوانین یوتیوب)
+- `docs/YOUTUBE-OAUTH-SETUP.md` — راه‌اندازی آپلود خودکار

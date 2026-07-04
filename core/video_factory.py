@@ -1,44 +1,73 @@
+"""VideoFactory Engine — the real pipeline (no mocks).
+
+topic -> ScriptWriter -> VoiceEngine -> StockFootageFetcher -> VideoAssembler
 """
-Video Factory Engine
-The core engine that acts like 'OpenMontage'.
-It takes a topic, generates a script, downloads/generates B-Rolls, 
-creates TTS audio, and compiles the final video.
-"""
-import os
-import time
+
+from datetime import datetime
+
+from .script_writer import ScriptWriter
+from .voice_engine import VoiceEngine
+from .stock_footage_fetcher import StockFootageFetcher
+from .video_assembler import VideoAssembler
+
 
 class VideoFactory:
     def __init__(self):
         self.name = "VideoFactory"
+        self.script_writer = ScriptWriter()
+        self.voice_engine = VoiceEngine()
+        self.footage_fetcher = StockFootageFetcher()
+        self.assembler = VideoAssembler()
 
-    def write_script(self, topic, style):
-        print(f"✍️ [{self.name}] Writing optimized script for '{topic}' (Style: {style})")
-        # In production: Connect to LLMRouter (DeepSeek/Claude)
-        return {"hook": "You won't believe this...", "body": "...", "outro": "Subscribe!"}
+    def build_video(self, topic: str, channel_cfg: dict, target_minutes: int = 8) -> dict:
+        """Full real pipeline for one channel/topic. Returns
+        {'video_path', 'duration', 'script', ...} or {'error': ...}."""
+        language = channel_cfg.get("language", "en")
+        niche_label = channel_cfg.get("niche_label", "")
+        voice = channel_cfg.get("voice", "en-US-ChristopherNeural")
 
-    def generate_voiceover(self, script, voice_profile):
-        print(f"🎙️ [{self.name}] Generating Voiceover using {voice_profile}...")
-        # In production: Connect to Edge-TTS or ElevenLabs
-        return "temp_audio.mp3"
+        print(f"[{self.name}] Writing script for '{topic}' ({niche_label}, {language})")
+        script = self.script_writer.write_script(topic, niche_label, language, target_minutes)
+        if not script.get("scenes"):
+            return {"error": "script_generation_failed"}
 
-    def acquire_visuals(self, script, style):
-        print(f"🎬 [{self.name}] Generating/Acquiring Visuals (Style: {style})...")
-        if style == "faceless_documentary":
-            print("   -> Prompting HunyuanVideo/Kling for cinematic B-Rolls...")
-        elif style == "talking_avatar":
-            print("   -> Prompting LongCat-Avatar-1.5 for Lip-Sync...")
-        return ["clip1.mp4", "clip2.mp4"]
+        print(f"[{self.name}] Generating narration ({script['engine']} script, "
+              f"{len(script['scenes'])} scenes)")
+        voice_result = self.voice_engine.generate_voiceover(script["full_text"], voice)
+        if not voice_result.get("audio_path"):
+            return {"error": "voiceover_generation_failed", "detail": voice_result.get("error")}
 
-    def edit_and_render(self, audio, visuals):
-        print(f"🎞️ [{self.name}] Rendering final video with dynamic subtitles...")
-        # In production: Use FFmpeg or MoviePy
-        time.sleep(1) # Simulating render time
-        output_path = f"output/final_render_{int(time.time())}.mp4"
-        print(f"✅ [{self.name}] Video successfully rendered: {output_path}")
-        return output_path
+        print(f"[{self.name}] Fetching stock footage for {len(script['scenes'])} scenes")
+        scenes_with_clips = self.footage_fetcher.fetch_for_script(script["scenes"])
 
-    def build_video(self, topic, config):
-        script = self.write_script(topic, config["style"])
-        audio = self.generate_voiceover(script, config["voice_profile"])
-        visuals = self.acquire_visuals(script, config["style"])
-        return self.edit_and_render(audio, visuals)
+        print(f"[{self.name}] Assembling final video (subtitles + audio mux)")
+        video_result = self.assembler.build_video(
+            scenes_with_clips,
+            voice_result["audio_path"],
+            voice_result["words"],
+            language=language,
+        )
+        if video_result.get("error"):
+            return video_result
+
+        return {
+            "video_path": video_result["video_path"],
+            "duration": video_result["duration"],
+            "scenes_rendered": video_result["scenes_rendered"],
+            "topic": topic,
+            "script_engine": script["engine"],
+            "built_at": datetime.now().isoformat(),
+        }
+
+
+if __name__ == "__main__":
+    import json
+
+    factory = VideoFactory()
+    demo_channel = {
+        "language": "en",
+        "niche_label": "Psychology & Self-Improvement",
+        "voice": "en-US-ChristopherNeural",
+    }
+    result = factory.build_video("why we procrastinate", demo_channel, target_minutes=1)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

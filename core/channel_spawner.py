@@ -1,86 +1,77 @@
+"""ChannelSpawner Agent — registers a new channel config into the factory
+database. Unlike the original mock version, this does NOT invent a fake
+YouTube channel: you must have already created the channel on youtube.com
+and run scripts/setup_youtube_oauth.py once to get its refresh token env
+var name. This agent just writes a real, validated config entry.
 """
-Channel Spawner Agent
-The "Casting Director & Brand Designer".
-Automatically generates a full YouTube Channel identity (Niche, Name, Avatar, Branding)
-and registers it into the database.
-"""
+
 import os
 import json
-import random
-from datetime import datetime
+
+from . import content_config as cfg
+
+_DB_PATH = "channels/database.json"
+
 
 class ChannelSpawner:
     def __init__(self):
         self.name = "ChannelSpawner"
-        self.db_path = "channels/database.json"
-        
-        # Top 10 High-RPM & Viral Niches for 2026
-        self.top_niches = [
-            "Finance & Wealth (Investing, Crypto)",
-            "Tech & AI Innovations",
-            "Motivation & Stoicism",
-            "True Crime & Unsolved Mysteries",
-            "Health, Wellness & Psychology",
-            "History & Mythology",
-            "Luxury Lifestyle & Travel",
-            "Space & Science",
-            "Relationships & Dating Advice",
-            "Horror & Paranormal Stories"
-        ]
+        self.db_path = _DB_PATH
 
-    def _load_db(self):
+    def _load_db(self) -> dict:
         if os.path.exists(self.db_path):
-            with open(self.db_path, "r") as f:
+            with open(self.db_path) as f:
                 return json.load(f)
         return {"channels": []}
 
-    def _save_db(self, data):
+    def _save_db(self, data: dict):
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with open(self.db_path, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def spawn_new_channel(self, requested_niche=None):
-        """
-        Creates a new channel from scratch.
-        If requested_niche is empty, it picks the most profitable one automatically.
-        """
-        niche = requested_niche if requested_niche else random.choice(self.top_niches)
-        print(f"✨ [{self.name}] Spawning new channel in niche: {niche}")
-        
-        # In production: Use LLM to generate name and target audience
-        # Simulating LLM creativity:
-        channel_id = f"ch_auto_{int(datetime.now().timestamp())}"
-        
-        # Determine Style based on Niche
-        style = "faceless_documentary"
-        if "AI" in niche or "Psychology" in niche or "Dating" in niche:
-            style = "talking_avatar"
-            
-        new_channel = {
+    def register_channel(self, channel_id: str, name: str, niche_key: str,
+                          language: str, refresh_token_env: str,
+                          upload_frequency: str = "weekly", active: bool = True) -> dict:
+        """Register a real channel. niche_key must exist in content_config.NICHES."""
+        if niche_key not in cfg.NICHES:
+            raise ValueError(f"Unknown niche_key '{niche_key}'. Valid: {list(cfg.NICHES)}")
+        if language not in cfg.VOICES:
+            raise ValueError(f"Unknown language '{language}'. Valid: {list(cfg.VOICES)}")
+
+        niche = cfg.NICHES[niche_key]
+        entry = {
             "id": channel_id,
-            "name": f"The {niche.split(' ')[0]} Hub", # Mock name generation
-            "niche": niche,
-            "style": style,
-            "target_audience": "Global Audience",
-            "upload_frequency": "weekly",
-            "voice_profile": "en-US-ChristopherNeural" if style == "faceless_documentary" else "en-US-JennyNeural",
-            "active": True
+            "name": name,
+            "niche_key": niche_key,
+            "niche_label": niche["label_fa"] if language == "fa" else niche["label_en"],
+            "language": language,
+            "voice": cfg.VOICES[language],
+            "category_id": cfg.YOUTUBE_CATEGORY_ID,
+            "refresh_token_env": refresh_token_env,
+            "upload_frequency": upload_frequency,
+            "active": active,
         }
-        
-        # 1. Generate Avatar / Logo Prompt
-        print(f"🎨 [{self.name}] Generating AI Prompts for Logo and Channel Banner...")
-        avatar_prompt = f"A highly detailed, professional YouTube logo for a channel about {niche}, minimalist, 8k resolution."
-        
-        # In production: Call HuggingFace / Cloudflare to generate the actual image
-        # visual_agent.generate_image(avatar_prompt, f"channels/assets/{channel_id}_logo.jpg")
-        
-        # 2. Save to DB
+
         db = self._load_db()
-        db["channels"].append(new_channel)
+        db["channels"] = [c for c in db["channels"] if c["id"] != channel_id]  # replace if exists
+        db["channels"].append(entry)
         self._save_db(db)
-        
-        print(f"✅ [{self.name}] Channel '{new_channel['name']}' successfully spawned and added to the Factory!")
-        return new_channel
+        print(f"[{self.name}] Registered channel '{name}' ({channel_id}) — "
+              f"niche={niche_key}, language={language}")
+        return entry
+
+    def list_channels(self) -> list:
+        return self._load_db().get("channels", [])
+
 
 if __name__ == "__main__":
-    spawner = ChannelSpawner()
-    spawner.spawn_new_channel()
+    import sys
+
+    print(f"{ChannelSpawner().name} — register a real channel interactively.")
+    print(f"Available niches: {list(cfg.NICHES)}")
+    cid = input("Channel id (short slug, e.g. 'luxe_en'): ").strip()
+    name = input("Channel display name: ").strip()
+    niche = input("Niche key: ").strip()
+    lang = input("Language (fa/en): ").strip()
+    env_var = input("Refresh token env var name (from setup_youtube_oauth.py): ").strip()
+    ChannelSpawner().register_channel(cid, name, niche, lang, env_var)

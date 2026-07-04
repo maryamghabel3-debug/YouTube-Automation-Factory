@@ -1,0 +1,10 @@
+# Core runtime dependencies for the real (non-mock) video factory pipeline
+requests>=2.32
+edge-tts>=6.1
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
+opencv-python-headless>=4.8
+Pillow>=10.0
+numpy>=1.26
+google-generativeai>=0.8

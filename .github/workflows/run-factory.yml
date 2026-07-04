@@ -1,0 +1,71 @@
+name: Run YouTube Factory
+on:
+  schedule: [{cron: '0 3 * * *'}]   # once a day at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: 'Build videos only, do not upload (1 = skip upload)'
+        required: false
+        default: '0'
+      target_minutes:
+        description: 'Target narration length per video (minutes)'
+        required: false
+        default: '8'
+
+concurrency:
+  group: git-push-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Run the factory
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          # Per-channel refresh tokens (add one secret per channel you register)
+          YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}
+          YOUTUBE_REFRESH_TOKEN_LUXE: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXE }}
+          SKIP_UPLOAD: ${{ github.event.inputs.skip_upload || '0' }}
+          TARGET_MINUTES: ${{ github.event.inputs.target_minutes || '8' }}
+        run: python main.py
+      - name: Push performance log & channel database changes
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "YouTube Factory Bot"
+          git config user.email "bot@youtube-factory.ai"
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" || true
+          git add channels/ || true
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 Factory run [$(date +%Y-%m-%d)]"
+            for i in 1 2 3; do
+              if git push; then break; fi
+              git fetch origin main
+              git rebase origin/main
+              sleep $((RANDOM % 5 + 2))
+            done
+          fi
+      - name: Upload rendered videos as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-output-videos
+          path: output/*.mp4
+          retention-days: 14

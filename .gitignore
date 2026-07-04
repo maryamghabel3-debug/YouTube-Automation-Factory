@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated media (heavy; regenerated every run, not meant to live in git)
+assets/footage/*
+assets/audio/*
+assets/work/*
+output/*.mp4
+
+# Keep directory structure
+!assets/footage/.gitkeep
+!assets/audio/.gitkeep
+!assets/work/.gitkeep
+!output/.gitkeep
+
+# Local secrets
+.env
+*.env
+token.json
+client_secret*.json
+
+# OS
+.DS_Store
