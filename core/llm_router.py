@@ -15,17 +15,28 @@ first, based on live 2026 research — see docs/LLM-PROVIDERS-2026.md):
                   elina-radman if using the SAME Google Cloud project/key —
                   use a separate GEMINI_API_KEY here to avoid competing for
                   the same quota)
-  3. openrouter - free ":free" model IDs, no card, ~50 req/day (or 1000/day
-                  with a one-time $10 top-up, never required)
-  4. deepseek   - NOT free per-token, but every new account gets a 5M-token
-                  grant (~30 days, no card) and after that is extremely
-                  cheap ($0.14/$0.28 per million tokens) -- included because
-                  the user explicitly asked for it
+  3. openrouter - free ":free" model IDs, no card. IMPORTANT (confirmed via
+                  a live diagnostic run on 2026-07-04): OpenRouter's free
+                  model catalog ROTATES -- a model id that was free last
+                  month can 404 today. _call_openrouter() therefore tries a
+                  short list of historically-stable free ids (Llama 3.3 70B,
+                  GPT-OSS 120B, Qwen3-Next 80B) and falls through the list on
+                  a 404 instead of giving up on the first one.
+  4. deepseek   - NOT free per-token; new accounts are SUPPOSED to get a
+                  5M-token/30-day free grant, but this can return
+                  HTTP 402 "Insufficient Balance" if that grant wasn't
+                  applied to your account/region -- confirmed live in
+                  production here. If you see this, add a small balance at
+                  platform.deepseek.com; after that it's extremely cheap
+                  ($0.14/$0.28 per million tokens). Included because the
+                  user explicitly asked for it.
   5. moonshot   - Kimi K2 via Moonshot's own API is prepaid (needs a min $1
-                  recharge, not purely free) -- included per user request,
-                  but ALSO reachable for free via OpenRouter's
-                  "moonshotai/kimi-k2:free" route, which this router prefers
-                  automatically (see _kimi_via_openrouter)
+                  recharge, not purely free) -- included per user request.
+                  _call_kimi_via_openrouter() also tries OpenRouter's
+                  "moonshotai/kimi-k2:free" id first in case it's
+                  temporarily free again, but as of 2026-07-04 this id is
+                  NOT in OpenRouter's free catalog (confirmed live) so it
+                  will usually fail through to the paid direct API.
 
 All providers are OpenAI-compatible chat-completion style except Gemini,
 which uses the google-generativeai SDK.
@@ -80,35 +91,69 @@ class LLMRouter:
         return resp.text
 
     def _call_openrouter(self, system_prompt: str, user_prompt: str, model: str = None) -> str:
+        """Tries a short list of well-known, historically-stable free model
+        IDs on OpenRouter (falling back through the list on a 404, since
+        OpenRouter's free-model catalog rotates over time -- verified live
+        via GET /api/v1/models that model availability genuinely changes
+        week to week, which is what caused a real 404 in production here).
+        A single explicit `model` argument (e.g. from _call_kimi_via_openrouter)
+        skips the fallback list and tries only that one."""
         key = os.environ.get("OPENROUTER_API_KEY", "")
         if not key:
             raise RuntimeError("no_key")
-        model = model or os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
-        r = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-            timeout=_TIMEOUT,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if "choices" not in data:
-            err = data.get("error", {})
-            msg = err.get("message", str(data)[:200]) if isinstance(err, dict) else str(err)[:200]
-            raise RuntimeError(msg)
-        return data["choices"][0]["message"]["content"]
+
+        candidates = [model] if model else [
+            os.environ.get("OPENROUTER_MODEL", ""),
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "openai/gpt-oss-120b:free",
+            "qwen/qwen3-next-80b-a3b-instruct:free",
+        ]
+        candidates = [c for c in candidates if c]
+
+        last_error = None
+        for candidate_model in candidates:
+            try:
+                r = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json={
+                        "model": candidate_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    timeout=_TIMEOUT,
+                )
+                if r.status_code == 404:
+                    # This specific model id is no longer available on
+                    # OpenRouter's free tier -- try the next candidate
+                    # instead of giving up (their free catalog rotates).
+                    last_error = f"{candidate_model}: 404 model_not_found"
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                if "choices" not in data:
+                    err = data.get("error", {})
+                    msg = err.get("message", str(data)[:200]) if isinstance(err, dict) else str(err)[:200]
+                    last_error = f"{candidate_model}: {msg}"
+                    continue
+                return data["choices"][0]["message"]["content"]
+            except requests.RequestException as e:
+                last_error = f"{candidate_model}: {e}"
+                continue
+
+        raise RuntimeError(last_error or "no_candidate_models_available")
 
     def _call_kimi_via_openrouter(self, system_prompt: str, user_prompt: str) -> str:
-        """Kimi K2 has a genuinely free route through OpenRouter's
-        'moonshotai/kimi-k2:free' model id -- preferred over the direct
-        Moonshot API (which requires a prepaid balance)."""
+        """Kimi K2 on OpenRouter is NOT reliably free (its free-tier ':free'
+        route rotates on/off; verified via a live GET /api/v1/models call on
+        2026-07-04 that returned zero free Kimi model ids). Kept as a
+        best-effort attempt at the ':free' id in case it's back, but this is
+        no longer guaranteed -- _call_openrouter's fallback list of
+        consistently-free models is the reliable path."""
         return self._call_openrouter(system_prompt, user_prompt, model="moonshotai/kimi-k2:free")
+
 
     def _call_moonshot_direct(self, system_prompt: str, user_prompt: str) -> str:
         """Direct Moonshot (Kimi) API -- requires MOONSHOT_API_KEY with a
@@ -136,7 +181,13 @@ class LLMRouter:
     def _call_deepseek(self, system_prompt: str, user_prompt: str) -> str:
         """Direct DeepSeek API -- new accounts get a 5M-token/30-day free
         grant (no card), then pay-per-token at very low rates ($0.14/$0.28
-        per M tokens). Included per explicit user request."""
+        per M tokens). Included per explicit user request.
+
+        NOTE: if this returns HTTP 402 ('Insufficient Balance'), the
+        account's free-token grant either hasn't been applied or has run
+        out -- this requires manually adding a small balance at
+        platform.deepseek.com, since 402 is DeepSeek's own billing system
+        rejecting the request, not a bug in this code."""
         key = os.environ.get("DEEPSEEK_API_KEY", "")
         if not key:
             raise RuntimeError("no_key")
@@ -152,6 +203,8 @@ class LLMRouter:
             },
             timeout=_TIMEOUT,
         )
+        if r.status_code == 402:
+            raise RuntimeError("402 Insufficient Balance -- add funds at platform.deepseek.com")
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
 

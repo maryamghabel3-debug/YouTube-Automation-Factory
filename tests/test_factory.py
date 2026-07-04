@@ -570,6 +570,98 @@ def test_llm_router_generate_json_reports_parse_failure(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# OpenRouter model rotation resilience — real production bug fix (2026-07-04):
+# OpenRouter's free-model catalog changes over time, so a hardcoded single
+# ":free" model id can 404 even with a valid key. _call_openrouter() must
+# fall through a list of candidates instead of failing on the first 404.
+# --------------------------------------------------------------------------- #
+def test_openrouter_falls_through_candidates_on_404(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+    router = LLMRouter()
+
+    call_log = []
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise __import__("requests").exceptions.HTTPError(str(self.status_code))
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        model = json["model"]
+        call_log.append(model)
+        if model == "meta-llama/llama-3.3-70b-instruct:free":
+            return FakeResp(200, {"choices": [{"message": {"content": "Second model worked!"}}]})
+        return FakeResp(404, {"error": "model not found"})
+
+    monkeypatch.setattr("core.llm_router.requests.post", fake_post)
+    text = router._call_openrouter("system", "user")
+    assert text == "Second model worked!"
+    # First candidate (empty OPENROUTER_MODEL env, so skipped) then the
+    # hardcoded stable list should have been tried in order until success.
+    assert "meta-llama/llama-3.3-70b-instruct:free" in call_log
+
+
+def test_openrouter_explicit_model_skips_fallback_list(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+    router = LLMRouter()
+    call_log = []
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        call_log.append(json["model"])
+        return FakeResp(404, {"error": "not found"})
+
+    monkeypatch.setattr("core.llm_router.requests.post", fake_post)
+    try:
+        router._call_openrouter("system", "user", model="moonshotai/kimi-k2:free")
+    except RuntimeError:
+        pass
+    # Only the one explicit model should have been tried, not the fallback list
+    assert call_log == ["moonshotai/kimi-k2:free"]
+
+
+def test_deepseek_402_gives_clear_balance_error(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fake-key")
+    router = LLMRouter()
+
+    class FakeResp:
+        status_code = 402
+
+        def json(self):
+            return {"error": {"message": "Insufficient Balance"}}
+
+    monkeypatch.setattr("core.llm_router.requests.post", lambda *a, **k: FakeResp())
+    try:
+        router._call_deepseek("system", "user")
+        assert False, "expected RuntimeError"
+    except RuntimeError as e:
+        assert "Insufficient Balance" in str(e) or "402" in str(e)
+
+
+# --------------------------------------------------------------------------- #
 # ScriptWriter with LLMRouter-based generation + competitor insights
 # --------------------------------------------------------------------------- #
 def test_script_writer_uses_fallback_when_all_providers_fail(monkeypatch):
