@@ -43,6 +43,7 @@ jobs:
           YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}
           YOUTUBE_REFRESH_TOKEN_LUXE: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXE }}
+          YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN }}
           ENGAGE_RECENT_VIDEOS: ${{ github.event.inputs.recent_videos || '5' }}
         run: python scripts/engage_comments.py
       - name: Push replied-comments ledger

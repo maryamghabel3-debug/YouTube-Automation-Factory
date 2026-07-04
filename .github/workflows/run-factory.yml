@@ -79,6 +79,7 @@ jobs:
           # rarely need to add one by hand.
           YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}
           YOUTUBE_REFRESH_TOKEN_LUXE: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXE }}
+          YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN }}
           TELEGRAM_BOT_TOKEN_FACTORY: ${{ secrets.TELEGRAM_BOT_TOKEN_FACTORY }}
           GH_PAT: ${{ secrets.GH_PAT }}
           REPO_OWNER: ${{ secrets.REPO_OWNER }}

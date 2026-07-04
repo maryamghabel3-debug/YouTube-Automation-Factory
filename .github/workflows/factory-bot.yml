@@ -37,16 +37,20 @@ jobs:
       - name: Push bot state changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          TELEGRAM_BOT_TOKEN_FACTORY: ${{ secrets.TELEGRAM_BOT_TOKEN_FACTORY }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           git config user.name "YouTube Factory Bot"
           git config user.email "bot@youtube-factory.ai"
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" || true
-          git add channels/ .github/workflows/run-factory.yml || true
+          git add channels/ .github/workflows/*.yml || true
           if ! git diff --staged --quiet; then
             git commit -m "🤖 FactoryBot state update [$(date "+%Y-%m-%d %H:%M")]"
+            PUSHED=0
             for i in 1 2 3 4 5; do
               if git push; then
                 echo "✅ Pushed successfully"
+                PUSHED=1
                 break
               fi
               echo "⚠️ Push rejected (attempt $i/5), rebasing onto latest main..."
@@ -54,4 +58,18 @@ jobs:
               git rebase origin/main
               sleep $((RANDOM % 5 + 2))
             done
+            if [ "$PUSHED" != "1" ]; then
+              echo "❌ All 5 push attempts failed -- state changes from this run (possibly"
+              echo "   including a just-completed OAuth connection) were LOST because this"
+              echo "   runner's working directory is thrown away when the job ends."
+              # Best-effort Telegram alert so a lost OAuth-connection commit is never
+              # silently invisible -- this exact scenario happened once in production
+              # (2026-07-04) before persist-credentials:false was added to fix the
+              # underlying cause; this is a safety net in case it ever recurs for a
+              # different reason (e.g. a genuine concurrent-run race).
+              curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN_FACTORY}/sendMessage" \
+                -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                -d "text=⚠️ هشدار فنی: ذخیره‌ی وضعیت بات (مثلاً یک اتصال OAuth تازه) بعد از ۵ تلاش پوش نشد. لطفاً /oauth یا هر دستوری که اخیراً زدید رو دوباره امتحان کنید." \
+                > /dev/null || true
+            fi
           fi
