@@ -33,6 +33,7 @@ from core.auto_publisher import AutoPublisher
 from core.performance_analyzer import PerformanceAnalyzer
 from core.gh_release import GitHubRelease
 from core import telegram_notify
+from core import schedule_guard
 
 _DB_PATH = "channels/database.json"
 _TELEGRAM_FILE_LIMIT = 49 * 1024 * 1024  # Bot API hard cap is 50MB; stay safely under it
@@ -132,6 +133,20 @@ def run_factory():
             print(f"\n⏸️  Skipping inactive channel: {ch['name']}")
             continue
 
+        upload_frequency = ch.get("upload_frequency", "weekly")
+        # BUG FIX (2026-07-04): upload_frequency was accepted at channel
+        # registration but never actually enforced -- every active channel
+        # got a brand new video (full LLM script + render + Shorts) EVERY
+        # day regardless of this setting, silently multiplying token/render
+        # cost. only_channel (explicit /testvideo or /makevideo from the
+        # bot) always bypasses this check -- a manual request should always
+        # run immediately.
+        if not only_channel and not schedule_guard.is_due(ch["id"], upload_frequency):
+            days_left = -schedule_guard.days_until_due(ch["id"], upload_frequency)
+            print(f"\n⏭️  Skipping {ch['name']}: not due yet per upload_frequency="
+                  f"'{upload_frequency}' ({days_left:.1f} days remaining)")
+            continue
+
         print(f"\n📺 Processing Channel: {ch['name']} (niche: {ch['niche_key']}, lang: {ch['language']})")
         print("-" * 50)
 
@@ -139,6 +154,11 @@ def run_factory():
         video_result = factory.build_video(
             topic, ch, target_minutes=target_minutes, make_shorts=make_shorts
         )
+        # Mark the schedule as consumed regardless of success/failure -- a
+        # failed attempt still spent real LLM/API calls, so a broken
+        # channel shouldn't retry every single day and multiply that cost.
+        if not only_channel:
+            schedule_guard.mark_run(ch["id"])
 
         if video_result.get("error"):
             print(f"❌ Video build failed for {ch['name']}: {video_result['error']}")

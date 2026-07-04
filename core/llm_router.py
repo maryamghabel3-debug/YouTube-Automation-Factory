@@ -30,13 +30,36 @@ first, based on live 2026 research — see docs/LLM-PROVIDERS-2026.md):
                   platform.deepseek.com; after that it's extremely cheap
                   ($0.14/$0.28 per million tokens). Included because the
                   user explicitly asked for it.
-  5. moonshot   - Kimi K2 via Moonshot's own API is prepaid (needs a min $1
+  5. avalai     - Iranian OpenAI-compatible aggregator, Rial payment (no
+                  international card needed), 400+ models at official
+                  provider pricing (no markup). Recommended paid fallback
+                  -- see docs/LLM-PROVIDERS-2026.md for the full comparison
+                  against GapGPT that led to this choice.
+  6. gapgpt     - Another Iranian aggregator, same Rial-payment model,
+                  slightly narrower model catalog than AvalAI but a
+                  reasonable second paid option.
+  7. deepseek   - NOT free per-token; new accounts are SUPPOSED to get a
+                  5M-token/30-day free grant, but this can return
+                  HTTP 402 "Insufficient Balance" if that grant wasn't
+                  applied to your account/region -- confirmed live in
+                  production here. If you see this, add a small balance at
+                  platform.deepseek.com; after that it's extremely cheap
+                  ($0.14/$0.28 per million tokens). Included because the
+                  user explicitly asked for it.
+  8. moonshot   - Kimi K2 via Moonshot's own API is prepaid (needs a min $1
                   recharge, not purely free) -- included per user request.
                   _call_kimi_via_openrouter() also tries OpenRouter's
                   "moonshotai/kimi-k2:free" id first in case it's
                   temporarily free again, but as of 2026-07-04 this id is
                   NOT in OpenRouter's free catalog (confirmed live) so it
                   will usually fail through to the paid direct API.
+
+SPENDING SAFETY: every call to a paid provider (avalai/gapgpt/deepseek/
+moonshot_direct) is checked against core/usage_guard.py's daily/monthly
+dollar budget BEFORE the request is sent. This exists because early manual
+testing burned through a free daily quota in seconds with no limit in
+place -- see docs/LLM-PROVIDERS-2026.md for the full monthly cost estimate
+and how to tune LLM_DAILY_BUDGET_USD / LLM_MONTHLY_BUDGET_USD.
 
 All providers are OpenAI-compatible chat-completion style except Gemini,
 which uses the google-generativeai SDK.
@@ -48,12 +71,21 @@ import json
 
 import requests
 
+from .usage_guard import UsageGuard
+
 _TIMEOUT = 45
+
+# Providers subject to a real dollar budget (UsageGuard) before every call
+# -- i.e. anything that isn't a genuinely free tier. See
+# docs/LLM-PROVIDERS-2026.md for the reasoning behind each provider's
+# classification.
+_PAID_PROVIDERS = {"avalai", "gapgpt", "deepseek", "moonshot_direct"}
 
 
 class LLMRouter:
     def __init__(self):
         self.name = "LLMRouter"
+        self.usage_guard = UsageGuard()
 
     # ------------------------------------------------------------------ #
     # Per-provider callers. Each returns the raw text response, or raises
@@ -89,6 +121,7 @@ class LLMRouter:
         full_prompt = f"{system_prompt}\n\n{user_prompt}" if system_prompt else user_prompt
         resp = model.generate_content(full_prompt)
         return resp.text
+
 
     def _call_openrouter(self, system_prompt: str, user_prompt: str, model: str = None) -> str:
         """Tries a short list of well-known, historically-stable free model
@@ -178,6 +211,53 @@ class LLMRouter:
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
 
+    def _call_avalai(self, system_prompt: str, user_prompt: str) -> str:
+        """AvalAI -- Iranian OpenAI-compatible aggregator (Rial payment, no
+        international card needed, official-provider pricing pass-through).
+        Recommended default paid model here is a cheap OpenAI-family model;
+        override with AVALAI_MODEL env var (e.g. 'deepseek-chat' or
+        'gpt-4o-mini') to pick something else from AvalAI's 400+ catalog."""
+        key = os.environ.get("AVALAI_API_KEY", "")
+        if not key:
+            raise RuntimeError("no_key")
+        model = os.environ.get("AVALAI_MODEL", "gpt-4o-mini")
+        r = requests.post(
+            "https://api.avalai.ir/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+            timeout=_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+    def _call_gapgpt(self, system_prompt: str, user_prompt: str) -> str:
+        """GapGPT -- another Iranian OpenAI-compatible aggregator (Rial
+        payment). Override GAPGPT_MODEL to pick a specific model."""
+        key = os.environ.get("GAPGPT_API_KEY", "")
+        if not key:
+            raise RuntimeError("no_key")
+        model = os.environ.get("GAPGPT_MODEL", "gpt-4o-mini")
+        r = requests.post(
+            "https://gapgpt.app/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+            timeout=_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
     def _call_deepseek(self, system_prompt: str, user_prompt: str) -> str:
         """Direct DeepSeek API -- new accounts get a 5M-token/30-day free
         grant (no card), then pay-per-token at very low rates ($0.14/$0.28
@@ -209,11 +289,19 @@ class LLMRouter:
         return r.json()["choices"][0]["message"]["content"]
 
     # ------------------------------------------------------------------ #
+    # Free providers first (groq/gemini/openrouter), then paid Iranian
+    # aggregators (avalai/gapgpt -- Rial payment, no card needed, official
+    # provider pricing), then the two originally-requested paid options
+    # (deepseek/moonshot_direct) last since AvalAI/GapGPT already offer the
+    # same underlying models at the same price with less individual-account
+    # balance-management overhead.
     _PROVIDERS = [
         ("groq", "_call_groq"),
         ("gemini", "_call_gemini"),
         ("kimi_openrouter", "_call_kimi_via_openrouter"),
         ("openrouter", "_call_openrouter"),
+        ("avalai", "_call_avalai"),
+        ("gapgpt", "_call_gapgpt"),
         ("deepseek", "_call_deepseek"),
         ("moonshot_direct", "_call_moonshot_direct"),
     ]
@@ -222,7 +310,14 @@ class LLMRouter:
         """Tries each provider in order (default: self._PROVIDERS) until one
         succeeds. Returns {'text': ..., 'provider': ...} on success, or
         {'error': ..., 'attempts': [...]} if every provider failed/had no
-        key configured -- caller should fall back to an offline template."""
+        key configured -- caller should fall back to an offline template.
+
+        Paid providers (see _PAID_PROVIDERS) are checked against
+        UsageGuard's daily/monthly dollar budget BEFORE the request is
+        sent -- if the estimated cost would exceed either limit, that
+        provider is skipped (logged in `attempts`) without ever making the
+        network call, so a runaway loop or an unexpectedly large batch can
+        never overspend."""
         providers = order or [name for name, _ in self._PROVIDERS]
         method_map = dict(self._PROVIDERS)
         attempts = []
@@ -231,6 +326,13 @@ class LLMRouter:
             method_name = method_map.get(provider_name)
             if not method_name:
                 continue
+
+            if provider_name in _PAID_PROVIDERS:
+                guard_result = self.usage_guard.check_and_reserve(provider_name, system_prompt, user_prompt)
+                if not guard_result.get("allowed"):
+                    attempts.append(f"{provider_name}: budget_guard_blocked ({guard_result.get('reason')})")
+                    continue
+
             method = getattr(self, method_name)
             try:
                 text = method(system_prompt, user_prompt)

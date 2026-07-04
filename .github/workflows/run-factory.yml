@@ -53,8 +53,19 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Iranian Rial-payment aggregators (no international card needed) --
+          # see docs/LLM-PROVIDERS-2026.md for the AvalAI vs GapGPT comparison
+          # that led to this order.
+          AVALAI_API_KEY: ${{ secrets.AVALAI_API_KEY }}
+          AVALAI_MODEL: ${{ secrets.AVALAI_MODEL }}
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+          GAPGPT_MODEL: ${{ secrets.GAPGPT_MODEL }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          # Hard spending caps for the paid providers above (core/usage_guard.py) --
+          # defaults ($0.50/day, $5/month) apply if these secrets are unset.
+          LLM_DAILY_BUDGET_USD: ${{ secrets.LLM_DAILY_BUDGET_USD }}
+          LLM_MONTHLY_BUDGET_USD: ${{ secrets.LLM_MONTHLY_BUDGET_USD }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}

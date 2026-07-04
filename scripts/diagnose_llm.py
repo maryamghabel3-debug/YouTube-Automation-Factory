@@ -27,6 +27,8 @@ def main():
         ("gemini", "GEMINI_API_KEY"),
         ("kimi_openrouter", "OPENROUTER_API_KEY"),
         ("openrouter", "OPENROUTER_API_KEY"),
+        ("avalai", "AVALAI_API_KEY"),
+        ("gapgpt", "GAPGPT_API_KEY"),
         ("deepseek", "DEEPSEEK_API_KEY"),
         ("moonshot_direct", "MOONSHOT_API_KEY"),
     ]

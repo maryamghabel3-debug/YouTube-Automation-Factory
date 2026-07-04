@@ -836,3 +836,192 @@ def test_auto_publisher_set_thumbnail_missing_google_libs_handled(workdir):
     publisher = AutoPublisher()
     result = publisher.set_thumbnail(FakeService(), "vid123", "output/thumb.jpg")
     assert "error" in result
+
+
+# --------------------------------------------------------------------------- #
+# UsageGuard — hard spending caps for paid LLM providers (user-requested
+# safety net after manual testing burned through a free quota in seconds)
+# --------------------------------------------------------------------------- #
+def test_usage_guard_allows_free_providers_unconditionally(workdir):
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    result = guard.check_and_reserve("groq", "system", "user prompt")
+    assert result["allowed"] is True
+    assert result["estimated_cost"] == 0.0
+
+
+def test_usage_guard_blocks_when_daily_budget_exceeded(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0.0001")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "100")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    long_prompt = "word " * 5000  # large enough to exceed a tiny budget
+    result = guard.check_and_reserve("avalai", "system", long_prompt)
+    assert result["allowed"] is False
+    assert "daily_budget_exceeded" in result["reason"]
+
+
+def test_usage_guard_blocks_when_monthly_budget_exceeded(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "100")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "0.0001")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    long_prompt = "word " * 5000
+    result = guard.check_and_reserve("gapgpt", "system", long_prompt)
+    assert result["allowed"] is False
+    assert "monthly_budget_exceeded" in result["reason"]
+
+
+def test_usage_guard_accumulates_spend_across_calls(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "1.0")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "100")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    r1 = guard.check_and_reserve("deepseek", "system", "short prompt")
+    assert r1["allowed"] is True
+    status = guard.status()
+    assert status["today_spend_usd"] > 0
+
+
+def test_usage_guard_status_reports_remaining_budget(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0.50")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "5.00")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    status = guard.status()
+    assert status["daily_budget_usd"] == 0.50
+    assert status["monthly_budget_usd"] == 5.00
+    assert status["day_remaining_usd"] == 0.50
+
+
+# --------------------------------------------------------------------------- #
+# LLMRouter — paid providers (avalai/gapgpt) respect the usage guard and are
+# tried in the expected position in the fallback chain
+# --------------------------------------------------------------------------- #
+def test_llm_router_skips_paid_provider_when_budget_guard_blocks(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("AVALAI_API_KEY", "fake-key")
+    router = LLMRouter()
+    monkeypatch.setattr(
+        router.usage_guard, "check_and_reserve",
+        lambda provider, s, u, expected_output_tokens=1500: {"allowed": False, "reason": "daily_budget_exceeded: test"}
+    )
+    result = router.generate("system", "user", order=["avalai"])
+    assert result["error"] == "all_providers_failed"
+    assert any("budget_guard_blocked" in a for a in result["attempts"])
+
+
+def test_llm_router_calls_avalai_when_budget_allows(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("AVALAI_API_KEY", "fake-key")
+    router = LLMRouter()
+    monkeypatch.setattr(
+        router.usage_guard, "check_and_reserve",
+        lambda provider, s, u, expected_output_tokens=1500: {"allowed": True, "estimated_cost": 0.001}
+    )
+    monkeypatch.setattr(router, "_call_avalai", lambda s, u: "AvalAI responded!")
+    result = router.generate("system", "user", order=["avalai"])
+    assert result["provider"] == "avalai"
+    assert result["text"] == "AvalAI responded!"
+
+
+def test_llm_router_gapgpt_also_respects_budget_guard(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("GAPGPT_API_KEY", "fake-key")
+    router = LLMRouter()
+    monkeypatch.setattr(
+        router.usage_guard, "check_and_reserve",
+        lambda provider, s, u, expected_output_tokens=1500: {"allowed": False, "reason": "monthly_budget_exceeded: test"}
+    )
+    result = router.generate("system", "user", order=["gapgpt"])
+    assert result["error"] == "all_providers_failed"
+    assert any("gapgpt" in a and "budget_guard_blocked" in a for a in result["attempts"])
+
+
+# --------------------------------------------------------------------------- #
+# ScheduleGuard — makes upload_frequency (daily/weekly/biweekly/monthly)
+# actually control how often a channel gets a new video. Real bug fix
+# (2026-07-04): this was previously ignored, so every active channel got a
+# brand-new video every single day regardless of its configured frequency.
+# --------------------------------------------------------------------------- #
+def test_schedule_guard_due_on_first_run(workdir):
+    from core import schedule_guard
+
+    assert schedule_guard.is_due("new_channel", "weekly") is True
+
+
+def test_schedule_guard_not_due_immediately_after_running(workdir):
+    from core import schedule_guard
+
+    schedule_guard.mark_run("ch1")
+    assert schedule_guard.is_due("ch1", "weekly") is False
+    assert schedule_guard.is_due("ch1", "daily") is False
+    assert schedule_guard.is_due("ch1", "monthly") is False
+
+
+def test_schedule_guard_due_after_enough_days_have_passed(workdir):
+    import json
+    from datetime import datetime, timedelta, timezone
+    from core import schedule_guard
+
+    # Simulate a channel that last ran 10 days ago
+    state_path = "channels/schedule_state.json"
+    os.makedirs("channels", exist_ok=True)
+    ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    with open(state_path, "w") as f:
+        json.dump({"ch2": {"last_run": ten_days_ago}}, f)
+
+    assert schedule_guard.is_due("ch2", "weekly") is True   # 7 days < 10 elapsed
+    assert schedule_guard.is_due("ch2", "monthly") is False  # 30 days > 10 elapsed
+
+
+def test_schedule_guard_unknown_frequency_defaults_to_weekly(workdir):
+    from core import schedule_guard
+
+    schedule_guard.mark_run("ch3")
+    # 'fortnightly' isn't a recognized key -- should behave like 'weekly'
+    assert schedule_guard.is_due("ch3", "fortnightly") is False
+
+
+def test_schedule_guard_days_until_due_reports_correctly(workdir):
+    from core import schedule_guard
+
+    schedule_guard.mark_run("ch4")
+    remaining = schedule_guard.days_until_due("ch4", "weekly")
+    assert 6.9 <= remaining <= 7.0
+
+
+# --------------------------------------------------------------------------- #
+# main.py integration: upload_frequency is actually enforced for the
+# scheduled (non ONLY_CHANNEL) path
+# --------------------------------------------------------------------------- #
+def test_main_skips_channel_not_yet_due(workdir, monkeypatch):
+    monkeypatch.delenv("ONLY_CHANNEL", raising=False)
+    from core.channel_spawner import ChannelSpawner
+    from core import schedule_guard
+    import main
+    import importlib
+    importlib.reload(main)
+
+    ChannelSpawner().register_channel(
+        "sched_test", "Schedule Test", "psychology", "en",
+        "YOUTUBE_REFRESH_TOKEN_SCHED", upload_frequency="weekly",
+    )
+    schedule_guard.mark_run("sched_test")  # just ran -- not due again for a week
+
+    calls = []
+    monkeypatch.setattr(main, "NicheAnalyzer", lambda: type(
+        "FakeAnalyzer", (), {"analyze_market": lambda self, niche: calls.append(niche) or "topic"}
+    )())
+
+    main.run_factory()
+    # analyze_market should never have been called since the channel isn't due
+    assert calls == []
