@@ -1,1 +1,17 @@
-{"channels": []}
+{
+  "channels": [
+    {
+      "id": "luxury_lifestyle_en",
+      "name": "LuxeVista",
+      "niche_key": "luxury_lifestyle",
+      "niche_label": "Luxury Lifestyle",
+      "rpm_estimate": "$6-14",
+      "language": "en",
+      "voice": "en-US-ChristopherNeural",
+      "category_id": "22",
+      "refresh_token_env": "YOUTUBE_REFRESH_TOKEN_LUXURY_LIFESTYLE_EN",
+      "upload_frequency": "weekly",
+      "active": true
+    }
+  ]
+}
