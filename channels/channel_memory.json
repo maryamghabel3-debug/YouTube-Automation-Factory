@@ -43,6 +43,22 @@
       "video_id": "",
       "video_url": "",
       "created_at": "2026-07-04T19:13:39.827957+00:00"
+    },
+    {
+      "topic": "Anyone know about this?",
+      "title": "Anyone know about this?",
+      "video_path": "output/video_1783195521520.mp4",
+      "footage_queries": [
+        "person thinking",
+        "open book pages",
+        "close up eyes",
+        "walking alone nature",
+        "sunset silhouette"
+      ],
+      "script_engine": "fallback_template",
+      "video_id": "",
+      "video_url": "",
+      "created_at": "2026-07-04T20:06:50.434803+00:00"
     }
   ]
 }
