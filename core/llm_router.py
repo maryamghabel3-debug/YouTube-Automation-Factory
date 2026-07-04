@@ -220,7 +220,11 @@ class LLMRouter:
         key = os.environ.get("AVALAI_API_KEY", "")
         if not key:
             raise RuntimeError("no_key")
-        model = os.environ.get("AVALAI_MODEL", "gpt-4o-mini")
+        # os.environ.get(name, default) does NOT catch an empty string --
+        # and GitHub Actions passes an unset secret through as '' rather
+        # than omitting the env var entirely (see core/usage_guard.py's
+        # docstring for the same bug found live in production 2026-07-04).
+        model = os.environ.get("AVALAI_MODEL", "").strip() or "gpt-4o-mini"
         r = requests.post(
             "https://api.avalai.ir/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
@@ -242,7 +246,10 @@ class LLMRouter:
         key = os.environ.get("GAPGPT_API_KEY", "")
         if not key:
             raise RuntimeError("no_key")
-        model = os.environ.get("GAPGPT_MODEL", "gpt-4o-mini")
+        # Same empty-string-secret gotcha as AVALAI_MODEL above -- GitHub
+        # Actions passes an unset secret through as '' rather than omitting
+        # the env var entirely, so a naive .get(name, default) is not safe.
+        model = os.environ.get("GAPGPT_MODEL", "").strip() or "gpt-4o-mini"
         r = requests.post(
             "https://gapgpt.app/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}"},

@@ -947,6 +947,64 @@ def test_llm_router_gapgpt_also_respects_budget_guard(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# AvalAI / GapGPT — empty-string env var for *_MODEL must fall back to a
+# sane default instead of sending an empty model name to the API. This is
+# the same GitHub-Actions-unset-secret-becomes-'' bug found in usage_guard.py,
+# hit live in production run 28714721164 for AVALAI_MODEL specifically.
+# --------------------------------------------------------------------------- #
+def test_avalai_empty_string_model_env_falls_back_to_default(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("AVALAI_API_KEY", "fake-key")
+    monkeypatch.setenv("AVALAI_MODEL", "")  # simulates an unset GitHub Secret
+    router = LLMRouter()
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    sent = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        sent["model"] = json["model"]
+        return FakeResp()
+
+    monkeypatch.setattr("core.llm_router.requests.post", fake_post)
+    text = router._call_avalai("system", "user")
+    assert text == "ok"
+    assert sent["model"] == "gpt-4o-mini"
+
+
+def test_gapgpt_empty_string_model_env_falls_back_to_default(monkeypatch):
+    from core.llm_router import LLMRouter
+
+    monkeypatch.setenv("GAPGPT_API_KEY", "fake-key")
+    monkeypatch.setenv("GAPGPT_MODEL", "")  # simulates an unset GitHub Secret
+    router = LLMRouter()
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    sent = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        sent["model"] = json["model"]
+        return FakeResp()
+
+    monkeypatch.setattr("core.llm_router.requests.post", fake_post)
+    text = router._call_gapgpt("system", "user")
+    assert text == "ok"
+    assert sent["model"] == "gpt-4o-mini"
+
+
+# --------------------------------------------------------------------------- #
 # ScheduleGuard — makes upload_frequency (daily/weekly/biweekly/monthly)
 # actually control how often a channel gets a new video. Real bug fix
 # (2026-07-04): this was previously ignored, so every active channel got a
@@ -1313,3 +1371,30 @@ def test_stock_footage_fetcher_picks_best_scoring_pexels_photo(workdir, monkeypa
 
     fetcher._pexels_photo("luxury car interior")
     assert downloaded_urls == ["http://high.jpg"]
+
+
+# --------------------------------------------------------------------------- #
+# UsageGuard — empty-string env vars must fall back to defaults, not crash.
+# Real production bug (2026-07-04): GitHub Actions passes an UNSET secret
+# through as an empty string ('${{ secrets.X }}' with no X configured
+# resolves to ''), not as a missing key -- os.environ.get(name, default)
+# alone does not catch this since '' is still a value, and float('') raises.
+# This broke every single run-factory.yml execution in production until
+# fixed.
+# --------------------------------------------------------------------------- #
+def test_usage_guard_empty_string_env_vars_fall_back_to_defaults(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    assert guard.daily_budget == 0.50
+    assert guard.monthly_budget == 5.00
+
+
+def test_usage_guard_invalid_env_var_value_falls_back_to_default(workdir, monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "not-a-number")
+    from core.usage_guard import UsageGuard
+
+    guard = UsageGuard()
+    assert guard.daily_budget == 0.50

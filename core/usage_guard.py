@@ -79,8 +79,25 @@ def _estimate_tokens(text: str) -> int:
 
 class UsageGuard:
     def __init__(self):
-        self.daily_budget = float(os.environ.get("LLM_DAILY_BUDGET_USD", _DEFAULT_DAILY_BUDGET))
-        self.monthly_budget = float(os.environ.get("LLM_MONTHLY_BUDGET_USD", _DEFAULT_MONTHLY_BUDGET))
+        # NOTE: GitHub Actions passes an unset secret through as an EMPTY
+        # STRING (not absent), so os.environ.get(..., default) alone isn't
+        # enough -- '' still overrides the Python default and float('')
+        # crashes. Confirmed live in production (2026-07-04): a workflow
+        # with 'LLM_DAILY_BUDGET_USD: ${{ secrets.LLM_DAILY_BUDGET_USD }}'
+        # and no such secret configured broke every run at import time.
+        self.daily_budget = self._parse_budget_env("LLM_DAILY_BUDGET_USD", _DEFAULT_DAILY_BUDGET)
+        self.monthly_budget = self._parse_budget_env("LLM_MONTHLY_BUDGET_USD", _DEFAULT_MONTHLY_BUDGET)
+
+    @staticmethod
+    def _parse_budget_env(env_name: str, default: float) -> float:
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            print(f"[UsageGuard] Ignoring invalid {env_name}={raw!r}, using default {default}")
+            return default
 
     def _current_spend(self, ledger: dict) -> tuple:
         day = ledger.get("days", {}).get(_today_key(), 0.0)
