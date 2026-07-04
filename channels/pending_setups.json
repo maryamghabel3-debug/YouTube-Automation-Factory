@@ -1,17 +1,1 @@
-{
-  "luxury_lifestyle_en": {
-    "chat_id": "6366392934",
-    "channel_id": "luxury_lifestyle_en",
-    "niche_key": "luxury_lifestyle",
-    "language": "en",
-    "name": "LuxeVista",
-    "voice_variant": "default",
-    "device_code": "AH-1Ng3yhfmRo8TMsGaRqTYEq_a99sHoclG5B4P-T2KX63zY1jR_RvIAFL8JaCuQ3uzS7tbf_lRy4oL7FhOKsSav2HVv319_qg",
-    "user_code": "NXS-DFL-RYWF",
-    "verification_url": "https://www.google.com/device",
-    "interval": 5,
-    "created_at": 1783186598.428181,
-    "expires_at": 1783188398.4281814,
-    "status": "awaiting_google_approval"
-  }
-}
+{}
