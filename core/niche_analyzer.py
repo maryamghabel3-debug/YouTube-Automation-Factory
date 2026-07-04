@@ -25,6 +25,7 @@ import requests
 
 from . import content_config as cfg
 from . import channel_memory
+from . import content_bank
 
 _ATOM = "http://www.w3.org/2005/Atom"
 _UA = "YouTubeAutomationFactory/1.0 (topic research; +https://github.com/maryamghabel3-debug)"
@@ -115,7 +116,7 @@ class NicheAnalyzer:
         return topics
 
     # ------------------------------------------------------------------ #
-    def analyze_market(self, niche_key: str, channel_id: str = "") -> str:
+    def analyze_market(self, niche_key: str, channel_id: str = "", language: str = "") -> str:
         """Returns ONE topic string to build a video around. Always passes
         through the safety blocklist, even for the evergreen fallback list,
         since a fully-automated channel has no human reviewing topics before
@@ -151,7 +152,23 @@ class NicheAnalyzer:
 
         evergreen = [t for t in niche.get("evergreen_topics", []) if _is_safe_topic(t)]
         fresh_evergreen = [t for t in evergreen if t not in already_covered]
-        fallback = random.choice(fresh_evergreen or evergreen or ["An interesting topic worth exploring"])
+        candidates = fresh_evergreen or evergreen or ["An interesting topic worth exploring"]
+
+        # Prefer a topic that has a real, hand-written, fact-checked script
+        # in core/content_bank.py (see that module's docstring -- written by
+        # the agent per explicit user request while no LLM API key is
+        # configured yet). This produces a genuinely good video instead of
+        # the generic 5-line placeholder, with zero extra plumbing needed:
+        # ScriptWriter._llm_script tries a real LLM first regardless, so the
+        # moment a working key is added this preference has no effect.
+        if language:
+            curated = [t for t in candidates if content_bank.has_script(niche_key, language, t)]
+            if curated:
+                chosen = random.choice(curated)
+                print(f"[{self.name}] Using evergreen topic with a curated script: '{chosen}'")
+                return chosen
+
+        fallback = random.choice(candidates)
         print(f"[{self.name}] Using evergreen fallback topic: '{fallback}'")
         return fallback
 

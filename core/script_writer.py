@@ -18,6 +18,8 @@ import os
 
 from .llm_router import LLMRouter
 from . import channel_memory
+from . import content_bank
+
 
 
 class ScriptWriter:
@@ -114,7 +116,7 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
 
     def write_script(self, topic: str, niche_label: str = "", language: str = "en",
                       target_minutes: int = 8, competitor_insights: str = "",
-                      channel_id: str = "") -> dict:
+                      channel_id: str = "", niche_key: str = "") -> dict:
         # channel_memory.py: avoid the script rehashing the same angle this
         # channel already used recently (user-requested "system memory").
         memory_note = channel_memory.summary_for_prompt(channel_id) if channel_id else ""
@@ -122,7 +124,22 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
         scenes, provider = self._llm_script(
             topic, niche_label, language, target_minutes, competitor_insights, memory_note
         )
-        engine = provider or "fallback_template"
+        engine = provider or ""
+
+        if not scenes:
+            # No LLM provider is configured/working (e.g. no AVALAI_API_KEY /
+            # GAPGPT_API_KEY / GROQ_API_KEY / GEMINI_API_KEY yet -- see
+            # docs/LLM-PROVIDERS-2026.md). Rather than immediately dropping
+            # to the generic 5-line placeholder, try core/content_bank.py --
+            # a set of real, hand-written, fact-checked scripts the agent
+            # authored directly (per explicit user request: "do the AI work
+            # yourself until I add a real key"). These are full 10-11 scene
+            # scripts with the same research-backed engagement structure an
+            # LLM would be asked to produce, not placeholders.
+            scenes = content_bank.get_script(niche_key, language, topic)
+            if scenes:
+                engine = "content_bank"
+
         if not scenes:
             scenes = self._fallback_script(topic, language)
             engine = "fallback_template"

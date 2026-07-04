@@ -152,7 +152,7 @@ def run_factory():
         print(f"\n📺 Processing Channel: {ch['name']} (niche: {ch['niche_key']}, lang: {ch['language']})")
         print("-" * 50)
 
-        topic = analyzer.analyze_market(ch["niche_key"], channel_id=ch["id"])
+        topic = analyzer.analyze_market(ch["niche_key"], channel_id=ch["id"], language=ch["language"])
         video_result = factory.build_video(
             topic, ch, target_minutes=target_minutes, make_shorts=make_shorts
         )

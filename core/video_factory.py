@@ -52,7 +52,7 @@ class VideoFactory:
         print(f"[{self.name}] Writing script for '{topic}' ({niche_label}, {language})")
         script = self.script_writer.write_script(
             topic, niche_label, language, target_minutes, competitor_insights,
-            channel_id=channel_id,
+            channel_id=channel_id, niche_key=niche_key,
         )
         if not script.get("scenes"):
             return {"error": "script_generation_failed"}

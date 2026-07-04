@@ -689,6 +689,78 @@ def test_script_writer_uses_llm_result_when_available(monkeypatch):
     assert script["scenes"] == fake_scenes
 
 
+# --------------------------------------------------------------------------- #
+# ContentBank — real, hand-written, fact-checked scripts used automatically
+# in place of the generic offline template whenever no LLM provider is
+# configured/working (explicit user request: "do the AI work yourself until
+# I add a real key"). LLM still tried first; content_bank is the SECOND
+# tier, before the generic 5-line fallback_template becomes the third tier.
+# --------------------------------------------------------------------------- #
+def test_content_bank_has_scripts_matching_every_niches_evergreen_topics():
+    from core import content_config as cfg
+    from core import content_bank as cb
+
+    for niche_key, niche in cfg.NICHES.items():
+        evergreen = set(niche["evergreen_topics"])
+        for language, niches in cb.CONTENT_BANK.items():
+            bank_topics = set(niches.get(niche_key, {}).keys())
+            # Every curated topic must be an EXACT match to a real evergreen
+            # topic string, otherwise NicheAnalyzer's fallback would never
+            # actually select it (see core/niche_analyzer.py).
+            assert bank_topics <= evergreen, (
+                f"{language}/{niche_key} has curated topics not present in "
+                f"content_config evergreen_topics: {bank_topics - evergreen}"
+            )
+
+
+def test_content_bank_scripts_have_valid_scene_shape():
+    from core import content_bank as cb
+
+    for language, niches in cb.CONTENT_BANK.items():
+        for niche_key, topics in niches.items():
+            for topic, scenes in topics.items():
+                assert len(scenes) >= 8, f"{language}/{niche_key}/{topic} too short"
+                for scene in scenes:
+                    assert scene.get("text"), f"{language}/{niche_key}/{topic} has empty scene text"
+                    assert scene.get("query"), f"{language}/{niche_key}/{topic} has empty scene query"
+
+
+def test_script_writer_uses_content_bank_when_llm_unavailable(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    monkeypatch.setattr(writer.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
+    script = writer.write_script(
+        "Why we procrastinate even when we know better", "Psychology", "en",
+        target_minutes=3, niche_key="psychology",
+    )
+    assert script["engine"] == "content_bank"
+    assert len(script["scenes"]) >= 8
+
+
+def test_script_writer_falls_back_past_content_bank_for_unknown_topic(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    monkeypatch.setattr(writer.router, "generate_json", lambda s, u, order=None: {"error": "all_providers_failed"})
+    script = writer.write_script(
+        "A totally made-up topic not in the content bank", "Psychology", "en",
+        target_minutes=1, niche_key="psychology",
+    )
+    assert script["engine"] == "fallback_template"
+
+
+def test_niche_analyzer_prefers_curated_topic_on_evergreen_fallback(monkeypatch):
+    from core.niche_analyzer import NicheAnalyzer
+
+    analyzer = NicheAnalyzer()
+    monkeypatch.setattr(analyzer, "_reddit_topics", lambda subs, limit_per_sub=5: [])
+    monkeypatch.setattr(analyzer, "_google_trends_topics", lambda keywords, geo="US": [])
+    topic = analyzer.analyze_market("psychology", language="en")
+    from core import content_bank as cb
+    assert cb.has_script("psychology", "en", topic)
+
+
 def test_script_writer_passes_competitor_insights_into_prompt(monkeypatch):
     from core.script_writer import ScriptWriter
 
