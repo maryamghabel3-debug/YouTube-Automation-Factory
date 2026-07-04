@@ -31,21 +31,29 @@ class ChannelSpawner:
 
     def register_channel(self, channel_id: str, name: str, niche_key: str,
                           language: str, refresh_token_env: str,
-                          upload_frequency: str = "weekly", active: bool = True) -> dict:
-        """Register a real channel. niche_key must exist in content_config.NICHES."""
+                          upload_frequency: str = "weekly", active: bool = True,
+                          voice_variant: str = "default") -> dict:
+        """Register a real channel. niche_key must exist in
+        content_config.NICHES, language must exist in content_config.LANGUAGES.
+        voice_variant: 'default' or 'alt' (see LANGUAGES[lang]['voice_alt']) —
+        lets two channels in the same language use different-sounding
+        narrators."""
         if niche_key not in cfg.NICHES:
-            raise ValueError(f"Unknown niche_key '{niche_key}'. Valid: {list(cfg.NICHES)}")
-        if language not in cfg.VOICES:
-            raise ValueError(f"Unknown language '{language}'. Valid: {list(cfg.VOICES)}")
+            raise ValueError(f"Unknown niche_key '{niche_key}'. Valid: {cfg.list_niches()}")
+        if language not in cfg.LANGUAGES:
+            raise ValueError(f"Unknown language '{language}'. Valid: {cfg.list_languages()}")
 
-        niche = cfg.NICHES[niche_key]
+        lang_cfg = cfg.LANGUAGES[language]
+        voice = lang_cfg["voice_alt"] if voice_variant == "alt" else lang_cfg["voice"]
+
         entry = {
             "id": channel_id,
             "name": name,
             "niche_key": niche_key,
-            "niche_label": niche["label_fa"] if language == "fa" else niche["label_en"],
+            "niche_label": cfg.niche_label(niche_key, language),
+            "rpm_estimate": cfg.NICHES[niche_key]["rpm_estimate"],
             "language": language,
-            "voice": cfg.VOICES[language],
+            "voice": voice,
             "category_id": cfg.YOUTUBE_CATEGORY_ID,
             "refresh_token_env": refresh_token_env,
             "upload_frequency": upload_frequency,
@@ -57,7 +65,7 @@ class ChannelSpawner:
         db["channels"].append(entry)
         self._save_db(db)
         print(f"[{self.name}] Registered channel '{name}' ({channel_id}) — "
-              f"niche={niche_key}, language={language}")
+              f"niche={niche_key}, language={language}, voice={voice}")
         return entry
 
     def list_channels(self) -> list:
@@ -65,13 +73,14 @@ class ChannelSpawner:
 
 
 if __name__ == "__main__":
-    import sys
-
     print(f"{ChannelSpawner().name} — register a real channel interactively.")
-    print(f"Available niches: {list(cfg.NICHES)}")
+    print(f"Available niches: {cfg.list_niches()}")
+    print(f"Available languages: {cfg.list_languages()}")
     cid = input("Channel id (short slug, e.g. 'luxe_en'): ").strip()
     name = input("Channel display name: ").strip()
     niche = input("Niche key: ").strip()
-    lang = input("Language (fa/en): ").strip()
+    lang = input("Language code: ").strip()
     env_var = input("Refresh token env var name (from setup_youtube_oauth.py): ").strip()
-    ChannelSpawner().register_channel(cid, name, niche, lang, env_var)
+    variant = input("Voice variant [default/alt] (Enter = default): ").strip() or "default"
+    ChannelSpawner().register_channel(cid, name, niche, lang, env_var, voice_variant=variant)
+

@@ -74,11 +74,44 @@ def test_channel_spawner_replaces_existing_entry(workdir):
 
     spawner = ChannelSpawner()
     spawner.register_channel("dup", "First Name", "psychology", "en", "ENV_A")
-    spawner.register_channel("dup", "Second Name", "history", "fa", "ENV_B")
+    spawner.register_channel("dup", "Second Name", "history_mystery", "fa", "ENV_B")
     channels = spawner.list_channels()
     assert len(channels) == 1
     assert channels[0]["name"] == "Second Name"
     assert channels[0]["language"] == "fa"
+
+
+def test_channel_spawner_supports_every_niche_and_language(workdir):
+    """Extensibility check: every niche/language combo in content_config
+    must be registerable without code changes (the whole point of the
+    config-driven design requested by the user)."""
+    from core.channel_spawner import ChannelSpawner
+    from core import content_config as cfg
+
+    spawner = ChannelSpawner()
+    for i, niche in enumerate(cfg.list_niches()):
+        for j, lang in enumerate(cfg.list_languages()):
+            cid = f"combo_{i}_{j}"
+            entry = spawner.register_channel(cid, f"{niche}-{lang}", niche, lang, f"ENV_{cid}")
+            assert entry["voice"] == cfg.LANGUAGES[lang]["voice"]
+            assert entry["niche_label"] in (
+                cfg.NICHES[niche]["label_fa"], cfg.NICHES[niche]["label_en"]
+            )
+
+    all_channels = spawner.list_channels()
+    assert len(all_channels) == len(cfg.list_niches()) * len(cfg.list_languages())
+
+
+def test_channel_spawner_voice_variant_differs_from_default(workdir):
+    from core.channel_spawner import ChannelSpawner
+    from core import content_config as cfg
+
+    spawner = ChannelSpawner()
+    default_entry = spawner.register_channel("v1", "V1", "finance", "en", "ENV_V1")
+    alt_entry = spawner.register_channel("v2", "V2", "finance", "en", "ENV_V2", voice_variant="alt")
+    assert default_entry["voice"] != alt_entry["voice"]
+    assert default_entry["voice"] == cfg.LANGUAGES["en"]["voice"]
+    assert alt_entry["voice"] == cfg.LANGUAGES["en"]["voice_alt"]
 
 
 # --------------------------------------------------------------------------- #
