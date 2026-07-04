@@ -14,6 +14,17 @@ fit, duration fit (for video), and query-tag relevance, and the
 highest-scoring one is downloaded. See that module's docstring for the full
 explicit criteria -- this directly answers "how does the system know if a
 photo/video is good or bad for this video."
+
+NO-REPEAT-WITHIN-A-VIDEO (added 2026-07-05, found via user review): the
+previous version scored candidates independently per scene, with no memory
+of what had already been picked earlier in the SAME video. Since
+footage_quality.pick_best() is deterministic, any two scenes that searched
+the same or a similar query (e.g. two "city skyline night" scenes in one
+script) always got the literal identical top-scoring clip downloaded and
+shown twice -- looking like a rendering mistake to a viewer. fetch_for_script()
+now tracks every clip id used so far in `_used_ids` and passes it through to
+pick_best()'s `exclude_ids`, so a repeated query still returns a *different*
+(the next-best) real clip instead of literally re-using the same one.
 """
 
 import os
@@ -37,9 +48,10 @@ class StockFootageFetcher:
     # ------------------------------------------------------------------ #
     # Pexels
     # ------------------------------------------------------------------ #
-    def _pexels_video(self, query: str, needed_duration: float = 0.0) -> str:
+    def _pexels_video(self, query: str, needed_duration: float = 0.0, exclude_ids: set = None) -> tuple:
+        """Returns (path, candidate_id) or ("", None)."""
         if not self.pexels_key:
-            return ""
+            return "", None
         try:
             r = self.session.get(
                 "https://api.pexels.com/videos/search",
@@ -50,7 +62,7 @@ class StockFootageFetcher:
             r.raise_for_status()
             videos = r.json().get("videos", [])
             if not videos:
-                return ""
+                return "", None
 
             candidates = []
             for video in videos:
@@ -61,6 +73,7 @@ class StockFootageFetcher:
                 # scoring beyond pure resolution/aspect/duration.
                 description_hint = video.get("url", "")
                 candidates.append({
+                    "_id": f"pexels_video_{video.get('id')}",
                     "width": video.get("width", 0),
                     "height": video.get("height", 0),
                     "duration": video.get("duration", 0),
@@ -68,9 +81,11 @@ class StockFootageFetcher:
                     "_video_files": video.get("video_files", []),
                 })
 
-            best = footage_quality.pick_best(query, candidates, needed_duration=needed_duration)
+            best = footage_quality.pick_best(
+                query, candidates, needed_duration=needed_duration, exclude_ids=exclude_ids,
+            )
             if not best:
-                return ""
+                return "", None
             print(f"[StockFootageFetcher] Pexels video pick score={best['_quality_score']} "
                   f"breakdown={best['_quality_breakdown']}")
 
@@ -80,15 +95,15 @@ class StockFootageFetcher:
                 reverse=True,
             )
             if not files:
-                return ""
-            return self._download(files[0]["link"], ext="mp4")
+                return "", None
+            return self._download(files[0]["link"], ext="mp4"), best["_id"]
         except requests.RequestException as e:
             print(f"[StockFootageFetcher] Pexels video error: {e}")
-            return ""
+            return "", None
 
-    def _pexels_photo(self, query: str, needed_duration: float = 0.0) -> str:
+    def _pexels_photo(self, query: str, needed_duration: float = 0.0, exclude_ids: set = None) -> tuple:
         if not self.pexels_key:
-            return ""
+            return "", None
         try:
             r = self.session.get(
                 "https://api.pexels.com/v1/search",
@@ -99,10 +114,11 @@ class StockFootageFetcher:
             r.raise_for_status()
             photos = r.json().get("photos", [])
             if not photos:
-                return ""
+                return "", None
 
             candidates = [
                 {
+                    "_id": f"pexels_photo_{p.get('id')}",
                     "width": p.get("width", 0),
                     "height": p.get("height", 0),
                     "description": p.get("alt", ""),
@@ -110,22 +126,22 @@ class StockFootageFetcher:
                 }
                 for p in photos
             ]
-            best = footage_quality.pick_best(query, candidates)
+            best = footage_quality.pick_best(query, candidates, exclude_ids=exclude_ids)
             if not best:
-                return ""
+                return "", None
             print(f"[StockFootageFetcher] Pexels photo pick score={best['_quality_score']} "
                   f"breakdown={best['_quality_breakdown']}")
-            return self._download(best["_url"], ext="jpg")
+            return self._download(best["_url"], ext="jpg"), best["_id"]
         except requests.RequestException as e:
             print(f"[StockFootageFetcher] Pexels photo error: {e}")
-            return ""
+            return "", None
 
     # ------------------------------------------------------------------ #
     # Pixabay (fallback)
     # ------------------------------------------------------------------ #
-    def _pixabay_video(self, query: str, needed_duration: float = 0.0) -> str:
+    def _pixabay_video(self, query: str, needed_duration: float = 0.0, exclude_ids: set = None) -> tuple:
         if not self.pixabay_key:
-            return ""
+            return "", None
         try:
             r = self.session.get(
                 "https://pixabay.com/api/videos/",
@@ -135,31 +151,34 @@ class StockFootageFetcher:
             r.raise_for_status()
             hits = r.json().get("hits", [])
             if not hits:
-                return ""
+                return "", None
 
             candidates = []
             for hit in hits:
                 medium = hit.get("videos", {}).get("medium", {})
                 candidates.append({
+                    "_id": f"pixabay_video_{hit.get('id')}",
                     "width": medium.get("width", 0),
                     "height": medium.get("height", 0),
                     "duration": hit.get("duration", 0),
                     "description": " ".join(hit.get("tags", "").split(",")),
                     "_url": medium.get("url", ""),
                 })
-            best = footage_quality.pick_best(query, candidates, needed_duration=needed_duration)
+            best = footage_quality.pick_best(
+                query, candidates, needed_duration=needed_duration, exclude_ids=exclude_ids,
+            )
             if not best or not best.get("_url"):
-                return ""
+                return "", None
             print(f"[StockFootageFetcher] Pixabay video pick score={best['_quality_score']} "
                   f"breakdown={best['_quality_breakdown']}")
-            return self._download(best["_url"], ext="mp4")
+            return self._download(best["_url"], ext="mp4"), best["_id"]
         except requests.RequestException as e:
             print(f"[StockFootageFetcher] Pixabay video error: {e}")
-            return ""
+            return "", None
 
-    def _pixabay_photo(self, query: str, needed_duration: float = 0.0) -> str:
+    def _pixabay_photo(self, query: str, needed_duration: float = 0.0, exclude_ids: set = None) -> tuple:
         if not self.pixabay_key:
-            return ""
+            return "", None
         try:
             r = self.session.get(
                 "https://pixabay.com/api/",
@@ -169,10 +188,11 @@ class StockFootageFetcher:
             r.raise_for_status()
             hits = r.json().get("hits", [])
             if not hits:
-                return ""
+                return "", None
 
             candidates = [
                 {
+                    "_id": f"pixabay_photo_{hit.get('id')}",
                     "width": hit.get("imageWidth", 0),
                     "height": hit.get("imageHeight", 0),
                     "description": " ".join(hit.get("tags", "").split(",")),
@@ -180,15 +200,15 @@ class StockFootageFetcher:
                 }
                 for hit in hits
             ]
-            best = footage_quality.pick_best(query, candidates)
+            best = footage_quality.pick_best(query, candidates, exclude_ids=exclude_ids)
             if not best or not best.get("_url"):
-                return ""
+                return "", None
             print(f"[StockFootageFetcher] Pixabay photo pick score={best['_quality_score']} "
                   f"breakdown={best['_quality_breakdown']}")
-            return self._download(best["_url"], ext="jpg")
+            return self._download(best["_url"], ext="jpg"), best["_id"]
         except requests.RequestException as e:
             print(f"[StockFootageFetcher] Pixabay photo error: {e}")
-            return ""
+            return "", None
 
     # ------------------------------------------------------------------ #
     def _download(self, url: str, ext: str) -> str:
@@ -217,10 +237,14 @@ class StockFootageFetcher:
             return ""
 
     # ------------------------------------------------------------------ #
-    def fetch_clip(self, query: str, prefer_video: bool = True, needed_duration: float = 0.0) -> dict:
-        """Returns {'path': ..., 'type': 'video'|'image', 'source': ...}.
+    def fetch_clip(self, query: str, prefer_video: bool = True, needed_duration: float = 0.0,
+                    exclude_ids: set = None) -> dict:
+        """Returns {'path': ..., 'type': 'video'|'image', 'source': ..., 'id': ...}.
         needed_duration (seconds): how long this scene's narration is, used
-        by footage_quality.py to prefer video clips that don't need to loop."""
+        by footage_quality.py to prefer video clips that don't need to loop.
+        exclude_ids (optional): candidate ids already used earlier in this
+        same video (see fetch_for_script) -- skipped so the same clip is
+        never shown twice in one video."""
         order = (
             [("pexels_video", self._pexels_video), ("pixabay_video", self._pixabay_video),
              ("pexels_photo", self._pexels_photo), ("pixabay_photo", self._pixabay_photo)]
@@ -229,17 +253,25 @@ class StockFootageFetcher:
                   ("pexels_video", self._pexels_video), ("pixabay_video", self._pixabay_video)]
         )
         for name, fn in order:
-            path = fn(query, needed_duration) if "video" in name else fn(query)
+            if "video" in name:
+                path, cid = fn(query, needed_duration, exclude_ids=exclude_ids)
+            else:
+                path, cid = fn(query, exclude_ids=exclude_ids)
             if path:
-                return {"path": path, "type": "video" if "video" in name else "image", "source": name}
+                return {"path": path, "type": "video" if "video" in name else "image",
+                        "source": name, "id": cid}
 
         placeholder = self._placeholder()
-        return {"path": placeholder, "type": "image", "source": "placeholder"}
+        return {"path": placeholder, "type": "image", "source": "placeholder", "id": None}
 
     def fetch_for_script(self, scenes: list) -> list:
         """For each scene dict {'text': ..., 'query': ...}, attach a real clip.
-        Wrapped so a single failed fetch never crashes the whole pipeline."""
+        Wrapped so a single failed fetch never crashes the whole pipeline.
+        Tracks every clip id already used earlier in THIS call so a script
+        that repeats a search query (or two similar ones) across scenes
+        never ends up showing the exact same footage twice in one video."""
         results = []
+        used_ids = set()
         for scene in scenes:
             query = scene.get("query") or scene.get("text", "")[:40]
             # Rough duration estimate per scene: ~2.5 words/second of speech,
@@ -248,10 +280,12 @@ class StockFootageFetcher:
             # duration later from real narration timing.
             estimated_duration = max(len(scene.get("text", "").split()) / 2.5, 1.5)
             try:
-                clip = self.fetch_clip(query, needed_duration=estimated_duration)
+                clip = self.fetch_clip(query, needed_duration=estimated_duration, exclude_ids=used_ids)
             except Exception as e:
                 print(f"[StockFootageFetcher] scene fetch failed ({query}): {e}")
-                clip = {"path": self._placeholder(), "type": "image", "source": "placeholder"}
+                clip = {"path": self._placeholder(), "type": "image", "source": "placeholder", "id": None}
+            if clip.get("id"):
+                used_ids.add(clip["id"])
             results.append({**scene, "clip": clip})
         return results
 

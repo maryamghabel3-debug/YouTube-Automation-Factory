@@ -920,12 +920,28 @@ def test_thumbnail_maker_handles_missing_background_gracefully(workdir):
     assert os.path.exists(result["path"])
 
 
-def test_thumbnail_maker_shortens_long_headlines():
+def test_thumbnail_maker_keeps_full_headline_no_longer_truncates():
+    """BUG FIXED (found by user review 2026-07-05): this used to hard-cut
+    to 5 words BEFORE _wrap_text ever ran, producing broken, grammatically
+    incomplete headlines on every real topic (all of which are 6+ words --
+    e.g. 'How billionaires actually spend their mornings' became 'HOW
+    BILLIONAIRES ACTUALLY SPEND THEIR', missing 'MORNINGS' entirely). The
+    full topic must now be preserved; _wrap_text's existing multi-line +
+    font-auto-shrink logic handles fitting it on the thumbnail."""
     from core.thumbnail_maker import _shorten_headline
 
-    short = _shorten_headline("This is a very long topic title with way too many words", "en", max_words=5)
-    assert len(short.split()) == 5
-    assert short == short.upper()
+    topic = "How billionaires actually spend their mornings"
+    headline = _shorten_headline(topic, "en")
+    assert headline == topic.upper()
+    assert "MORNINGS" in headline
+
+
+def test_thumbnail_maker_persian_headline_not_uppercased():
+    from core.thumbnail_maker import _shorten_headline
+
+    topic = "چطور میلیاردرها واقعا صبح‌هاشون رو می‌گذرونن"
+    headline = _shorten_headline(topic, "fa")
+    assert headline == topic
 
 
 # --------------------------------------------------------------------------- #
@@ -1532,6 +1548,47 @@ def test_stock_footage_fetcher_picks_best_scoring_pexels_photo(workdir, monkeypa
 
     fetcher._pexels_photo("luxury car interior")
     assert downloaded_urls == ["http://high.jpg"]
+
+
+def test_stock_footage_fetcher_never_repeats_same_clip_within_one_video(workdir, monkeypatch):
+    """BUG FIXED (found by user review 2026-07-05): footage_quality.pick_best
+    is deterministic, so two scenes searching the same (or a similarly
+    scoring) query used to always download the literal identical clip --
+    visibly repeated footage in the finished video. fetch_for_script() must
+    now track ids already used and skip them for later scenes."""
+    monkeypatch.setenv("PEXELS_API_KEY", "fake-key")
+    from core.stock_footage_fetcher import StockFootageFetcher
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "photos": [
+                    {"id": 1, "width": 1920, "height": 1080, "alt": "city skyline night",
+                     "src": {"large2x": "http://best.jpg"}},
+                    {"id": 2, "width": 1920, "height": 1080, "alt": "city skyline night",
+                     "src": {"large2x": "http://second.jpg"}},
+                ]
+            }
+
+    fetcher = StockFootageFetcher()
+    monkeypatch.setattr(fetcher.session, "get", lambda *a, **k: FakeResp())
+    downloaded_urls = []
+    monkeypatch.setattr(fetcher, "_download", lambda url, ext: downloaded_urls.append(url) or f"downloaded_{len(downloaded_urls)}.jpg")
+
+    # Two scenes with the EXACT same query -- previously both would have
+    # downloaded http://best.jpg (the deterministic top scorer both times).
+    scenes = [
+        {"text": "first scene", "query": "city skyline night"},
+        {"text": "second scene", "query": "city skyline night"},
+    ]
+    results = StockFootageFetcher.fetch_for_script(fetcher, scenes)
+    assert len(results) == 2
+    assert downloaded_urls[0] != downloaded_urls[1]
+    assert downloaded_urls == ["http://best.jpg", "http://second.jpg"]
+
 
 
 # --------------------------------------------------------------------------- #

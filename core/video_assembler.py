@@ -27,6 +27,19 @@ _WORK_DIR = "assets/work"
 _W, _H = 1920, 1080
 _FPS = 30
 
+# BUG FIXED (found by user review 2026-07-05): scene durations were being
+# computed proportionally to narration text length with NO upper cap, so a
+# single scene (one still image or one video clip) often held the screen
+# for 10-14+ seconds straight -- far above the ~3-5 second visual-change
+# interval research shows keeps faceless/documentary-style viewers engaged
+# (see docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md and the cited retention-editing
+# research). Any single visual block longer than this is now split into
+# multiple shorter sub-cuts of the SAME source clip (different Ken Burns
+# pan/zoom direction for images, different start offset for videos) --
+# this needs zero extra footage-API calls and still counts as a real visual
+# change for retention, not padding.
+_MAX_SEGMENT_SECONDS = 6.0
+
 
 class VideoAssembler:
     def __init__(self):
@@ -60,12 +73,42 @@ class VideoAssembler:
             return 0.0
 
     # ------------------------------------------------------------------ #
-    def _render_image_segment(self, image_path: str, duration: float, out_path: str) -> bool:
-        """Ken Burns effect: slow zoom-in on a still image for `duration` seconds."""
+    def _render_image_segment(self, image_path: str, duration: float, out_path: str,
+                               pan_direction: str = "in") -> bool:
+        """Ken Burns effect: continuous zoom/pan on a still image for the
+        FULL `duration` seconds.
+
+        BUG FIXED (found by user review 2026-07-05): the old fixed zoom
+        rate (+0.0008/frame) hit its 1.15x cap after ~6.25 seconds at 30fps
+        REGARDLESS of the scene's actual duration -- since most scenes ran
+        10-14 seconds (see the char-length-proportional split below), the
+        image visibly FROZE completely still for the second half of nearly
+        every scene, which is exactly the "boring, doesn't seem to change"
+        complaint. The zoom rate is now computed per-scene so the motion
+        finishes exactly when the segment ends, no matter how long it runs.
+
+        pan_direction: 'in' (zoom in, centered), 'out' (zoom out from a
+        tight crop), 'left' or 'right' (zoom in while panning) -- used by
+        the scene-splitting logic below so consecutive sub-cuts of the SAME
+        source image visibly look like different shots, not a repeat.
+        """
         frames = max(int(duration * _FPS), 1)
-        # zoompan needs a slightly upscaled source to avoid edge artifacts while zooming
+        target_zoom = 1.15
+        rate = (target_zoom - 1.0) / frames
+
+        if pan_direction == "out":
+            z_expr = f"if(eq(on,0),{target_zoom},max(zoom-{rate:.8f},1.0))"
+        else:
+            z_expr = f"min(zoom+{rate:.8f},{target_zoom})"
+
+        x_expr, y_expr = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"  # centered (default 'in')
+        if pan_direction == "left":
+            x_expr = "iw/2-(iw/zoom/2)-(on/{})*40".format(max(frames, 1))
+        elif pan_direction == "right":
+            x_expr = "iw/2-(iw/zoom/2)+(on/{})*40".format(max(frames, 1))
+
         vf = (
-            f"scale=3840:2160,zoompan=z='min(zoom+0.0008,1.15)':"
+            f"scale=3840:2160,zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':"
             f"d={frames}:s={_W}x{_H}:fps={_FPS}"
         )
         cmd = [
@@ -75,20 +118,29 @@ class VideoAssembler:
         ]
         return self._run(cmd, f"Ken Burns render ({image_path})")
 
-    def _render_video_segment(self, video_path: str, duration: float, out_path: str) -> bool:
-        """Scale/crop a stock video clip to 1920x1080 and trim/loop to `duration`."""
+    def _render_video_segment(self, video_path: str, duration: float, out_path: str,
+                               start_offset: float = 0.0) -> bool:
+        """Scale/crop a stock video clip to 1920x1080 and trim/loop to
+        `duration`, starting from `start_offset` seconds into the source
+        clip -- used by the scene-splitting logic below so consecutive
+        sub-cuts of the SAME source clip show different moments of it
+        rather than repeating the identical opening frames."""
         src_dur = self._probe_duration(video_path)
         vf = f"scale={_W}:{_H}:force_original_aspect_ratio=increase,crop={_W}:{_H},fps={_FPS}"
-        if src_dur and src_dur < duration:
+        # Only seek if the source is long enough to have real content left
+        # after the offset; otherwise fall back to the start (avoids seeking
+        # past the end of a short clip and getting a black/empty segment).
+        safe_offset = start_offset if (src_dur and start_offset < max(src_dur - 0.5, 0)) else 0.0
+        if src_dur and (src_dur - safe_offset) < duration:
             # Loop short clips so they cover the full narration duration
             cmd = [
-                "ffmpeg", "-y", "-stream_loop", "-1", "-i", video_path,
+                "ffmpeg", "-y", "-ss", f"{safe_offset:.3f}", "-stream_loop", "-1", "-i", video_path,
                 "-vf", vf, "-t", f"{duration:.3f}",
                 "-pix_fmt", "yuv420p", "-an", out_path,
             ]
         else:
             cmd = [
-                "ffmpeg", "-y", "-i", video_path,
+                "ffmpeg", "-y", "-ss", f"{safe_offset:.3f}", "-i", video_path,
                 "-vf", vf, "-t", f"{duration:.3f}",
                 "-pix_fmt", "yuv420p", "-an", out_path,
             ]
@@ -162,20 +214,43 @@ Format: Layer, Start, End, Style, Text
         total_len = sum(text_lengths)
         segment_paths = []
 
+        # Alternating pan directions/video-offsets so consecutive sub-cuts
+        # of the SAME source clip look like distinct shots instead of an
+        # obvious repeat (see _MAX_SEGMENT_SECONDS split below).
+        _IMAGE_PAN_CYCLE = ["in", "left", "out", "right"]
+
         for i, (scene, tlen) in enumerate(zip(scenes_with_clips, text_lengths)):
             duration = max(audio_duration * (tlen / total_len), 1.5)
             clip = scene.get("clip", {})
-            seg_out = os.path.join(work_dir, f"seg_{i:03d}.mp4")
-            ok = False
-            if clip.get("path") and os.path.exists(clip["path"]):
-                if clip.get("type") == "video":
-                    ok = self._render_video_segment(clip["path"], duration, seg_out)
+            has_clip = bool(clip.get("path") and os.path.exists(clip["path"]))
+
+            # BUG FIXED (found by user review 2026-07-05): a single scene
+            # used to hold ONE static shot for its entire (often 10-14s)
+            # duration with no cut -- far above the ~3-5s visual-change
+            # interval that keeps faceless-channel viewers engaged (see
+            # docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md). Split any scene longer
+            # than _MAX_SEGMENT_SECONDS into multiple shorter sub-cuts of
+            # the SAME clip (no extra footage-API calls needed) -- each
+            # sub-cut uses a different Ken Burns pan direction (images) or a
+            # different start offset (videos) so it reads as a real cut,
+            # not an obvious loop.
+            num_subcuts = max(1, int(duration // _MAX_SEGMENT_SECONDS) + (1 if duration % _MAX_SEGMENT_SECONDS > 1.0 else 0))
+            sub_duration = duration / num_subcuts
+
+            for sub_i in range(num_subcuts):
+                seg_out = os.path.join(work_dir, f"seg_{i:03d}_{sub_i:02d}.mp4")
+                ok = False
+                if has_clip:
+                    if clip.get("type") == "video":
+                        start_offset = sub_i * (sub_duration * 0.6)  # slight forward skip per sub-cut
+                        ok = self._render_video_segment(clip["path"], sub_duration, seg_out, start_offset=start_offset)
+                    else:
+                        pan = _IMAGE_PAN_CYCLE[sub_i % len(_IMAGE_PAN_CYCLE)]
+                        ok = self._render_image_segment(clip["path"], sub_duration, seg_out, pan_direction=pan)
+                if ok and os.path.exists(seg_out):
+                    segment_paths.append(seg_out)
                 else:
-                    ok = self._render_image_segment(clip["path"], duration, seg_out)
-            if ok and os.path.exists(seg_out):
-                segment_paths.append(seg_out)
-            else:
-                print(f"[VideoAssembler] scene {i} render failed or missing clip; skipping")
+                    print(f"[VideoAssembler] scene {i} sub-cut {sub_i} render failed or missing clip; skipping")
 
         if not segment_paths:
             return {"error": "no_segments_rendered"}

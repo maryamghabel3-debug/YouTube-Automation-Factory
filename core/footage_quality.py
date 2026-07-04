@@ -114,15 +114,27 @@ def score_candidate(query: str, width: int, height: int, duration: float = 0.0,
     return {"total": round(sum(breakdown.values()), 2), "breakdown": breakdown}
 
 
-def pick_best(query: str, candidates: list, needed_duration: float = 0.0) -> dict:
+def pick_best(query: str, candidates: list, needed_duration: float = 0.0,
+              exclude_ids: set = None) -> dict:
     """candidates: list of dicts each with at minimum 'width'/'height', and
     optionally 'duration' (videos) and 'tags'/'description' (both APIs
     provide at least one of these). Returns the single best-scoring
     candidate dict (with a '_quality_score' key added) or {} if the list
-    is empty."""
+    is empty.
+
+    exclude_ids (optional): a set of candidate '_id' values to skip entirely
+    -- used by StockFootageFetcher to avoid picking the SAME clip twice
+    within one video (found via user review 2026-07-05: the previous
+    behavior always deterministically re-picked the literal top-scoring
+    result for a repeated search query, so any script re-using a query like
+    'city skyline night' in two different scenes got the identical clip
+    twice, looking like an editing mistake). If every candidate is
+    excluded, falls back to the best-scoring one anyway (a repeated clip is
+    still better than no clip)."""
     if not candidates:
         return {}
 
+    exclude_ids = exclude_ids or set()
     scored = []
     for c in candidates:
         result = score_candidate(
@@ -136,4 +148,7 @@ def pick_best(query: str, candidates: list, needed_duration: float = 0.0) -> dic
         scored.append({**c, "_quality_score": result["total"], "_quality_breakdown": result["breakdown"]})
 
     scored.sort(key=lambda c: c["_quality_score"], reverse=True)
-    return scored[0]
+
+    fresh = [c for c in scored if c.get("_id") not in exclude_ids]
+    return fresh[0] if fresh else scored[0]
+

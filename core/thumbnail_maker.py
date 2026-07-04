@@ -71,9 +71,22 @@ def _extract_video_frame(video_path: str, out_path: str, at_seconds: float = 1.0
 
 
 def _shorten_headline(topic: str, language: str, max_words: int = 5) -> str:
-    words = topic.strip().split()
-    short = " ".join(words[:max_words])
-    return short.upper() if language != "fa" else short
+    """BUG FIXED (2026-07-05, found by user review): this used to hard-cut
+    the topic to `max_words` BEFORE _wrap_text ever ran, so any topic longer
+    than 5 words produced a broken, grammatically-incomplete headline (e.g.
+    'How billionaires actually spend their mornings' -> 'HOW BILLIONAIRES
+    ACTUALLY SPEND THEIR', missing the word 'MORNINGS' entirely). Every
+    single evergreen topic in content_config.py is 6+ words, so this bug
+    fired on literally every thumbnail ever produced.
+
+    Fix: return the FULL topic untouched (still uppercased for English) and
+    let make_thumbnail()'s existing _wrap_text() + font-auto-shrink loop
+    (already designed to fit up to 3 lines) do the actual layout. This
+    param is kept for backwards compatibility but no longer used to
+    pre-truncate."""
+    text = topic.strip()
+    return text.upper() if language != "fa" else text
+
 
 
 def _wrap_text(draw, text: str, font, max_width: int) -> list:
