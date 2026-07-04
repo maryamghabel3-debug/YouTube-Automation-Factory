@@ -1,0 +1,66 @@
+name: Engage YouTube Comments
+on:
+  schedule: [{cron: '0 */4 * * *'}]  # every 4 hours
+  workflow_dispatch:
+    inputs:
+      recent_videos:
+        description: 'How many recent videos per channel to check for new comments'
+        required: false
+        default: '5'
+
+concurrency:
+  group: git-push-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  engage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests google-api-python-client google-auth-oauthlib google-auth-httplib2 google-generativeai
+      - name: Reply to recent comments
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AVALAI_API_KEY: ${{ secrets.AVALAI_API_KEY }}
+          AVALAI_MODEL: ${{ secrets.AVALAI_MODEL }}
+          GAPGPT_API_KEY: ${{ secrets.GAPGPT_API_KEY }}
+          GAPGPT_MODEL: ${{ secrets.GAPGPT_MODEL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          LLM_DAILY_BUDGET_USD: ${{ secrets.LLM_DAILY_BUDGET_USD }}
+          LLM_MONTHLY_BUDGET_USD: ${{ secrets.LLM_MONTHLY_BUDGET_USD }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ secrets.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN_ELINA: ${{ secrets.YOUTUBE_REFRESH_TOKEN_ELINA }}
+          YOUTUBE_REFRESH_TOKEN_LUXE: ${{ secrets.YOUTUBE_REFRESH_TOKEN_LUXE }}
+          ENGAGE_RECENT_VIDEOS: ${{ github.event.inputs.recent_videos || '5' }}
+        run: python scripts/engage_comments.py
+      - name: Push replied-comments ledger
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "YouTube Factory Bot"
+          git config user.email "bot@youtube-factory.ai"
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" || true
+          git add channels/ || true
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 Comment engagement sweep [$(date "+%Y-%m-%d %H:%M")]"
+            for i in 1 2 3 4 5; do
+              if git push; then
+                echo "✅ Pushed successfully"
+                break
+              fi
+              echo "⚠️ Push rejected (attempt $i/5), rebasing onto latest main..."
+              git fetch origin main
+              git rebase origin/main
+              sleep $((RANDOM % 5 + 2))
+            done
+          fi

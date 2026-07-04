@@ -14,16 +14,19 @@
 | 🏆 CompetitorAnalyzer | ✅ تحلیل ویدیوهای واقعاً پربازدید همین نیچ قبل از نوشتن اسکریپت (الگوی هوک/ریتم، نه کپی محتوا) |
 | ✍️ ScriptWriter | ✅ اسکریپت اصیل با زنجیره‌ی ۶ ارائه‌دهنده‌ی هوش مصنوعی رایگان (Groq/Gemini/Kimi K2/OpenRouter/DeepSeek/Moonshot، هرکدوم موجود بود) + fallback آفلاین |
 | 🗣 VoiceEngine | ✅ صدای واقعی با edge-tts + زمان‌بندی دقیق کلمه‌به‌کلمه |
-| 🎥 StockFootageFetcher | ✅ فوتیج/عکس واقعی از Pexels/Pixabay (رایگان، مجاز تجاری) |
+| 🎥 StockFootageFetcher | ✅ فوتیج/عکس واقعی از Pexels/Pixabay + امتیازدهی کیفیت واقعی (رزولوشن/نسبت‌ابعاد/تناسب‌زمانی/ارتباط موضوعی، نه انتخاب تصادفی) |
 | 🎞 VideoAssembler | ✅ رندر واقعی با FFmpeg: افکت Ken Burns + زیرنویس حک‌شده + میکس صدا |
 | 🖼 ThumbnailMaker | ✅ کاور واقعی ۱۲۸۰×۷۲۰ از فریم فوتیج + متن پرکنتراست (بدون نیاز به AI تصویر) |
 | 🎞 ShortsMaker | ✅ تولید خودکار ۲-۳ کلیپ Shorts عمودی از هر ویدیوی بلند (بر اساس تشخیص هوک با AI) |
-| 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) + ست‌کردن تامبنیل سفارشی |
+| 🧠 ChannelMemory | ✅ حافظه‌ی دائمی هر کانال — هر ویدیوی ساخته‌شده ثبت می‌شه، جلوگیری از تکرار موضوع |
+| 💬 CommentEngager | ✅ جواب خودکار و اختصاصی به کامنت‌های تازه (بلافاصله بعد از آپلود + هر ۴ ساعت) |
+| 📤 AutoPublisher | ✅ آپلود واقعی با YouTube Data API v3 (OAuth2) + ست‌کردن تامبنیل سفارشی + کپشن با CTA تعامل‌محور |
 | 📊 PerformanceAnalyzer | ✅ آمار واقعی بازدید/لایک از YouTube API |
+| 🛡 UsageGuard + ScheduleGuard | ✅ سقف هزینه‌ی روزانه/ماهانه هوش مصنوعی + اجرای واقعی طبق `upload_frequency` |
 
-همه با **۴۷ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts + تولید تامبنیل و Shorts) است.
+همه با **۸۴ تست خودکار** پوشش داده شده‌اند (`tests/test_factory.py`) که شامل یک تست end-to-end واقعی (اجرای کامل ffmpeg + edge-tts + تولید تامبنیل و Shorts) است.
 
-جزئیات بیشتر: `docs/HIGH-VIEW-STRATEGY.md` (تحلیل رقبا/تامبنیل/Shorts) و `docs/LLM-PROVIDERS-2026.md` (زنجیره‌ی ارائه‌دهنده‌های هوش مصنوعی رایگان).
+جزئیات بیشتر: `docs/HIGH-VIEW-STRATEGY.md` (تحلیل رقبا/تامبنیل/Shorts)، `docs/LLM-PROVIDERS-2026.md` (ارائه‌دهنده‌های هوش مصنوعی + سقف هزینه)، و `docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md` (تحقیق کامل رشد/درآمد یوتیوب + معیار کیفیت فوتیج).
 
 ## 💰 هزینه: تقریباً $۰ در ماه
 تمام سرویس‌های استفاده‌شده رایگان و بدون نیاز به کارت بانکی بین‌المللی هستند (فقط ثبت‌نام ایمیلی).

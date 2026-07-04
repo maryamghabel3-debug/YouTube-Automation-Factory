@@ -26,7 +26,12 @@ except ImportError:
     _HAS_GOOGLE_LIBS = False
 
 _SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
-           "https://www.googleapis.com/auth/youtube"]
+           "https://www.googleapis.com/auth/youtube",
+           # Required specifically for comment operations (reply/like via
+           # core/comment_engager.py) -- Google's docs state this is the
+           # ONLY scope accepted for commentThreads.insert/comments.insert,
+           # even though the broader 'youtube' scope above covers uploads.
+           "https://www.googleapis.com/auth/youtube.force-ssl"]
 
 
 class AutoPublisher:
@@ -34,6 +39,12 @@ class AutoPublisher:
         self.name = "AutoPublisher"
 
     # ------------------------------------------------------------------ #
+    def build_service(self, channel_cfg: dict):
+        """Public wrapper around _build_service so other modules (e.g.
+        core/comment_engager.py) can reuse the exact same OAuth client
+        construction without duplicating the refresh-token logic."""
+        return self._build_service(channel_cfg)
+
     def _build_service(self, channel_cfg: dict):
         """Builds an authorized YouTube API client from a refresh token stored
         in the environment variable named in channel_cfg['refresh_token_env'].
@@ -74,21 +85,35 @@ class AutoPublisher:
         return build("youtube", "v3", credentials=creds)
 
     # ------------------------------------------------------------------ #
-    def generate_metadata(self, topic: str, niche_label: str = "", language: str = "en") -> dict:
+    def generate_metadata(self, topic: str, niche_label: str = "", language: str = "en",
+                           comment_prompt: str = "") -> dict:
         """SEO-oriented title/description/tags. Simple heuristic generator
-        (no extra API cost); can be swapped for an LLM call later."""
+        (no extra API cost); can be swapped for an LLM call later.
+
+        comment_prompt (optional): the specific engagement question the
+        script's outro scene asked (see core/script_writer.py's
+        research-backed structure) -- when given, it's surfaced again in
+        the description since many viewers read the description before/
+        instead of watching to the end, and a specific question there
+        measurably increases comment volume more than a generic
+        "let me know what you think!" (see docs/YOUTUBE-GROWTH-AND-
+        ENGAGEMENT.md for the research this is based on)."""
         if language == "fa":
             title = f"{topic} | نکاتی که باید بدانید"
+            cta = comment_prompt or "نظرتون درباره این موضوع چیه؟ توی کامنت‌ها بگید."
             description = (
                 f"در این ویدیو درباره «{topic}» صحبت می‌کنیم.\n\n"
-                f"اگر این ویدیو براتون مفید بود، حتما لایک و سابسکرایب کنید. 🔔\n\n"
+                f"💬 {cta}\n\n"
+                f"اگر این ویدیو براتون مفید بود، حتما دنبال کنید تا ویدیوی بعدی رو از دست ندید. 🔔\n\n"
                 f"#{niche_label.replace(' ', '')} #آموزش"
             )
         else:
             title = f"{topic} | What You Need to Know"
+            cta = comment_prompt or "What's your take on this? Let me know in the comments below."
             description = (
                 f"In this video, we explore: {topic}\n\n"
-                f"If you found this helpful, please like and subscribe for more! 🔔\n\n"
+                f"💬 {cta}\n\n"
+                f"If you found this valuable, subscribe so you don't miss the next one! 🔔\n\n"
                 f"#{niche_label.replace(' ', '')} #Documentary"
             )
         tags = [niche_label, "documentary", "educational"] if niche_label else ["educational"]

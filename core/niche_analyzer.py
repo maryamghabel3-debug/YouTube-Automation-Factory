@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from . import content_config as cfg
+from . import channel_memory
 
 _ATOM = "http://www.w3.org/2005/Atom"
 _UA = "YouTubeAutomationFactory/1.0 (topic research; +https://github.com/maryamghabel3-debug)"
@@ -114,28 +115,43 @@ class NicheAnalyzer:
         return topics
 
     # ------------------------------------------------------------------ #
-    def analyze_market(self, niche_key: str) -> str:
+    def analyze_market(self, niche_key: str, channel_id: str = "") -> str:
         """Returns ONE topic string to build a video around. Always passes
         through the safety blocklist, even for the evergreen fallback list,
         since a fully-automated channel has no human reviewing topics before
-        a video gets made and uploaded."""
+        a video gets made and uploaded.
+
+        If channel_id is given, uses core/channel_memory.py to avoid
+        re-picking a topic this channel already covered recently -- answers
+        the user's request that the system "remember what video it made for
+        each channel" and not repeat itself."""
         niche = cfg.NICHES.get(niche_key, {})
         subs = niche.get("subreddits", [])
         search_terms = niche.get("search_terms", [])
         print(f"[{self.name}] Analyzing trending topics for niche: {niche_key}")
+
+        already_covered = set(channel_memory.recent_topics(channel_id)) if channel_id else set()
 
         topics = [t for t in (self._reddit_topics(subs) if subs else []) if _is_safe_topic(t)]
         # Independent second signal — combined with Reddit results so we're
         # not fully dependent on one source's rate limits or a quiet week.
         topics += self._google_trends_topics(search_terms) if search_terms else []
 
-        if topics:
-            chosen = random.choice(topics[:10])
+        fresh_topics = [t for t in topics if t not in already_covered]
+        if fresh_topics:
+            chosen = random.choice(fresh_topics[:10])
             print(f"[{self.name}] Found real trending topic: '{chosen}'")
+            return chosen
+        if topics:
+            # Every trending topic found was already covered recently --
+            # still better than crashing, but note it clearly in the log.
+            chosen = random.choice(topics[:10])
+            print(f"[{self.name}] All trending topics already covered recently; reusing: '{chosen}'")
             return chosen
 
         evergreen = [t for t in niche.get("evergreen_topics", []) if _is_safe_topic(t)]
-        fallback = random.choice(evergreen or ["An interesting topic worth exploring"])
+        fresh_evergreen = [t for t in evergreen if t not in already_covered]
+        fallback = random.choice(fresh_evergreen or evergreen or ["An interesting topic worth exploring"])
         print(f"[{self.name}] Using evergreen fallback topic: '{fallback}'")
         return fallback
 

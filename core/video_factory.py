@@ -14,6 +14,7 @@ from .video_assembler import VideoAssembler
 from .thumbnail_maker import ThumbnailMaker
 from .shorts_maker import ShortsMaker
 from . import content_config as cfg
+from . import channel_memory
 
 
 class VideoFactory:
@@ -47,9 +48,11 @@ class VideoFactory:
         if competitor_insights:
             print(f"[{self.name}] Competitor insights: {competitor_insights[:150]}...")
 
+        channel_id = channel_cfg.get("id", "")
         print(f"[{self.name}] Writing script for '{topic}' ({niche_label}, {language})")
         script = self.script_writer.write_script(
-            topic, niche_label, language, target_minutes, competitor_insights
+            topic, niche_label, language, target_minutes, competitor_insights,
+            channel_id=channel_id,
         )
         if not script.get("scenes"):
             return {"error": "script_generation_failed"}
@@ -87,6 +90,21 @@ class VideoFactory:
                 script["full_text"], num_clips=3, topic=topic,
             )
 
+        footage_queries = [s.get("query", "") for s in script["scenes"] if s.get("query")]
+        title_guess = topic  # AutoPublisher.generate_metadata() computes the real title;
+        # this is just a readable placeholder for memory until main.py updates it post-upload.
+        if channel_id:
+            channel_memory.record_video(
+                channel_id, topic, title_guess, video_result["video_path"],
+                footage_queries, script["engine"],
+            )
+
+        # The outro scene (last one) is where ScriptWriter's prompt asks for
+        # a specific comment question -- surfaced separately so
+        # AutoPublisher.generate_metadata() can echo it in the description
+        # (see docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md).
+        outro_text = script["scenes"][-1]["text"] if script["scenes"] else ""
+
         return {
             "video_path": video_result["video_path"],
             "duration": video_result["duration"],
@@ -96,6 +114,7 @@ class VideoFactory:
             "topic": topic,
             "script_engine": script["engine"],
             "competitor_insights": competitor_insights,
+            "outro_text": outro_text,
             "built_at": datetime.now().isoformat(),
         }
 

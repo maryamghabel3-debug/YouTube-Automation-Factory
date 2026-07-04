@@ -1025,3 +1025,291 @@ def test_main_skips_channel_not_yet_due(workdir, monkeypatch):
     main.run_factory()
     # analyze_market should never have been called since the channel isn't due
     assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# ChannelMemory — per-channel record of every video produced (user-requested
+# "the system should remember what video it made for each channel")
+# --------------------------------------------------------------------------- #
+def test_channel_memory_records_and_retrieves_topics(workdir):
+    from core import channel_memory
+
+    channel_memory.record_video("ch1", "Topic A", "Title A", "video_a.mp4", ["query1"], "groq")
+    channel_memory.record_video("ch1", "Topic B", "Title B", "video_b.mp4", ["query2"], "fallback_template")
+
+    topics = channel_memory.recent_topics("ch1")
+    assert topics == ["Topic A", "Topic B"]
+
+
+def test_channel_memory_updates_in_place_when_video_id_backfilled(workdir):
+    from core import channel_memory
+
+    channel_memory.record_video("ch2", "Topic X", "Title X", "video_x.mp4", ["q"], "groq")
+    channel_memory.record_video(
+        "ch2", "Topic X", "Title X (final)", "video_x.mp4", [], "groq",
+        video_id="abc123", video_url="https://youtube.com/watch?v=abc123",
+    )
+
+    history = channel_memory.channel_history("ch2")
+    assert len(history) == 1  # updated in place, not duplicated
+    assert history[0]["video_id"] == "abc123"
+
+
+def test_channel_memory_recent_footage_queries_flattened(workdir):
+    from core import channel_memory
+
+    channel_memory.record_video("ch3", "T1", "Title1", "v1.mp4", ["luxury car", "yacht"], "groq")
+    channel_memory.record_video("ch3", "T2", "Title2", "v2.mp4", ["jet"], "groq")
+
+    queries = channel_memory.recent_footage_queries("ch3")
+    assert queries == ["luxury car", "yacht", "jet"]
+
+
+def test_channel_memory_summary_for_prompt_empty_when_no_history(workdir):
+    from core import channel_memory
+
+    assert channel_memory.summary_for_prompt("brand_new_channel") == ""
+
+
+def test_channel_memory_summary_for_prompt_lists_recent_topics(workdir):
+    from core import channel_memory
+
+    channel_memory.record_video("ch4", "The Cold Case Nobody Solved", "T", "v.mp4", [], "groq")
+    note = channel_memory.summary_for_prompt("ch4")
+    assert "The Cold Case Nobody Solved" in note
+    assert "do not repeat" in note.lower()
+
+
+# --------------------------------------------------------------------------- #
+# NicheAnalyzer + ScriptWriter integration with ChannelMemory (avoid repeats)
+# --------------------------------------------------------------------------- #
+def test_niche_analyzer_avoids_recently_covered_evergreen_topic(workdir, monkeypatch):
+    from core import channel_memory
+    from core.niche_analyzer import NicheAnalyzer
+    from core import content_config as cfg
+
+    analyzer = NicheAnalyzer()
+    # Force offline (no live Reddit/Trends) so only evergreen topics are used
+    monkeypatch.setattr(analyzer, "_reddit_topics", lambda subs, limit_per_sub=5: [])
+    monkeypatch.setattr(analyzer, "_google_trends_topics", lambda keywords, geo="US": [])
+
+    evergreen = cfg.NICHES["psychology"]["evergreen_topics"]
+    # Mark every evergreen topic except the last one as already covered
+    for t in evergreen[:-1]:
+        channel_memory.record_video("mem_ch", t, t, "v.mp4", [], "groq")
+
+    chosen = analyzer.analyze_market("psychology", channel_id="mem_ch")
+    assert chosen == evergreen[-1]
+
+
+def test_script_writer_includes_memory_note_in_prompt(monkeypatch):
+    from core import channel_memory
+    from core.script_writer import ScriptWriter
+
+    channel_memory.record_video("mem_ch2", "Old Topic", "T", "v.mp4", [], "groq")
+
+    writer = ScriptWriter()
+    captured = {}
+
+    def fake_generate_json(system_prompt, user_prompt, order=None):
+        captured["user_prompt"] = user_prompt
+        return {"error": "all_providers_failed"}
+
+    monkeypatch.setattr(writer.router, "generate_json", fake_generate_json)
+    writer.write_script("New Topic", "Psychology", "en", target_minutes=1, channel_id="mem_ch2")
+    assert "Old Topic" in captured["user_prompt"]
+
+
+# --------------------------------------------------------------------------- #
+# CommentEngager — automatic AI replies to viewer comments (comments are the
+# highest-weighted YouTube 2026 engagement signal, per docs/YOUTUBE-GROWTH-
+# AND-ENGAGEMENT.md). No "pin comment" support since the YouTube Data API
+# has no such endpoint (confirmed via research, not assumed).
+# --------------------------------------------------------------------------- #
+def test_comment_engager_returns_clean_error_without_service(workdir):
+    from core.comment_engager import CommentEngager
+
+    result = CommentEngager().reply_to_new_comments(None, "vid123", "Some Topic", "en")
+    assert result["error"] == "oauth_not_configured"
+    assert result["replied"] == []
+
+
+def test_comment_engager_replies_to_new_comments_and_tracks_ledger(workdir, monkeypatch):
+    from core.comment_engager import CommentEngager
+
+    engager = CommentEngager()
+    monkeypatch.setattr(engager, "_generate_reply", lambda text, topic, lang: "Great point, thanks for sharing!")
+
+    class FakeCommentThreads:
+        def list(self, **kwargs):
+            class Exec:
+                def execute(self_inner):
+                    return {
+                        "items": [
+                            {"id": "c1", "snippet": {"topLevelComment": {"snippet": {"textDisplay": "Nice video!"}}}},
+                            {"id": "c2", "snippet": {"topLevelComment": {"snippet": {"textDisplay": "Loved this!"}}}},
+                        ]
+                    }
+            return Exec()
+
+    posted = []
+
+    class FakeComments:
+        def insert(self, **kwargs):
+            class Exec:
+                def execute(self_inner):
+                    posted.append(kwargs["body"]["snippet"]["parentId"])
+                    return {}
+            return Exec()
+
+    class FakeService:
+        def commentThreads(self):
+            return FakeCommentThreads()
+
+        def comments(self):
+            return FakeComments()
+
+    result = engager.reply_to_new_comments(FakeService(), "vidABC", "Some Topic", "en")
+    assert set(result["replied"]) == {"c1", "c2"}
+    assert set(posted) == {"c1", "c2"}
+
+    # Second sweep should skip already-replied comments (ledger persisted to disk)
+    result2 = engager.reply_to_new_comments(FakeService(), "vidABC", "Some Topic", "en")
+    assert result2["replied"] == []
+
+
+def test_comment_engager_skips_comment_when_no_llm_provider_available(workdir, monkeypatch):
+    from core.comment_engager import CommentEngager
+
+    engager = CommentEngager()
+    monkeypatch.setattr(engager, "_generate_reply", lambda text, topic, lang: "")  # simulates all providers down
+
+    class FakeCommentThreads:
+        def list(self, **kwargs):
+            class Exec:
+                def execute(self_inner):
+                    return {"items": [{"id": "c1", "snippet": {"topLevelComment": {"snippet": {"textDisplay": "Hi"}}}}]}
+            return Exec()
+
+    class FakeService:
+        def commentThreads(self):
+            return FakeCommentThreads()
+
+    result = CommentEngager().reply_to_new_comments(FakeService(), "vidXYZ", "Topic", "en")
+    assert result["replied"] == []  # not marked replied -- can retry next sweep
+
+
+# --------------------------------------------------------------------------- #
+# AutoPublisher.generate_metadata — specific comment-question CTA
+# --------------------------------------------------------------------------- #
+def test_generate_metadata_uses_specific_comment_prompt_when_given():
+    from core.auto_publisher import AutoPublisher
+
+    meta = AutoPublisher().generate_metadata(
+        "Why we procrastinate", "Psychology", "en",
+        comment_prompt="Which of these habits do YOU struggle with the most?",
+    )
+    assert "Which of these habits do YOU struggle with the most?" in meta["description"]
+
+
+def test_generate_metadata_falls_back_to_generic_cta_without_comment_prompt():
+    from core.auto_publisher import AutoPublisher
+
+    meta = AutoPublisher().generate_metadata("Some Topic", "Finance", "en")
+    assert "comments" in meta["description"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# FootageQuality — real, explicit, explainable scoring criteria for picking
+# WHICH stock photo/video candidate to use (previously: random.choice over
+# raw API results, with zero quality criteria). Directly answers the user's
+# question "how does the system know if a photo/video is good or bad?"
+# --------------------------------------------------------------------------- #
+def test_footage_quality_prefers_1080p_over_low_res():
+    from core.footage_quality import score_resolution
+
+    hd_score = score_resolution(1920, 1080)
+    low_score = score_resolution(640, 360)
+    assert hd_score > low_score
+    assert hd_score == 35.0  # exactly in the ideal 1080p-4K band
+
+
+def test_footage_quality_penalizes_below_720p_heavily():
+    from core.footage_quality import score_resolution
+
+    tiny_score = score_resolution(480, 270)
+    assert tiny_score <= 5.0
+
+
+def test_footage_quality_prefers_16_9_aspect_ratio():
+    from core.footage_quality import score_aspect_ratio
+
+    widescreen = score_aspect_ratio(1920, 1080)  # exactly 16:9
+    square = score_aspect_ratio(1080, 1080)       # 1:1, needs heavy cropping
+    assert widescreen > square
+    assert widescreen == 25.0
+
+
+def test_footage_quality_duration_fit_penalizes_clips_shorter_than_scene():
+    from core.footage_quality import score_duration_fit
+
+    long_enough = score_duration_fit(clip_duration=10, needed_duration=5)
+    too_short = score_duration_fit(clip_duration=2, needed_duration=5)
+    assert long_enough > too_short
+
+
+def test_footage_quality_query_relevance_rewards_tag_matches():
+    from core.footage_quality import score_query_relevance
+
+    high = score_query_relevance("luxury car interior", "luxury car interior leather seats")
+    low = score_query_relevance("luxury car interior", "beach sunset waves")
+    assert high > low
+    assert high == 20.0  # all 3 significant words matched
+
+
+def test_footage_quality_pick_best_selects_highest_scoring_candidate():
+    from core.footage_quality import pick_best
+
+    candidates = [
+        {"width": 640, "height": 360, "duration": 3, "tags": "unrelated content here"},
+        {"width": 1920, "height": 1080, "duration": 8, "tags": "luxury yacht ocean view"},
+    ]
+    best = pick_best("luxury yacht", candidates, needed_duration=5)
+    assert best["width"] == 1920
+    assert "_quality_score" in best
+    assert "_quality_breakdown" in best
+
+
+def test_footage_quality_pick_best_empty_list_returns_empty_dict():
+    from core.footage_quality import pick_best
+
+    assert pick_best("query", []) == {}
+
+
+# --------------------------------------------------------------------------- #
+# StockFootageFetcher now uses FootageQuality scoring (not random.choice) --
+# verify the real HTTP-mocked path picks the higher-scoring candidate
+# --------------------------------------------------------------------------- #
+def test_stock_footage_fetcher_picks_best_scoring_pexels_photo(workdir, monkeypatch):
+    monkeypatch.setenv("PEXELS_API_KEY", "fake-key")
+    from core.stock_footage_fetcher import StockFootageFetcher
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "photos": [
+                    {"width": 640, "height": 360, "alt": "irrelevant scene", "src": {"large2x": "http://low.jpg"}},
+                    {"width": 1920, "height": 1080, "alt": "luxury car interior", "src": {"large2x": "http://high.jpg"}},
+                ]
+            }
+
+    fetcher = StockFootageFetcher()
+    monkeypatch.setattr(fetcher.session, "get", lambda *a, **k: FakeResp())
+    downloaded_urls = []
+    monkeypatch.setattr(fetcher, "_download", lambda url, ext: downloaded_urls.append(url) or "downloaded.jpg")
+
+    fetcher._pexels_photo("luxury car interior")
+    assert downloaded_urls == ["http://high.jpg"]

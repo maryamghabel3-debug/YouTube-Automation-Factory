@@ -34,6 +34,8 @@ from core.performance_analyzer import PerformanceAnalyzer
 from core.gh_release import GitHubRelease
 from core import telegram_notify
 from core import schedule_guard
+from core import channel_memory
+from core.comment_engager import CommentEngager
 
 _DB_PATH = "channels/database.json"
 _TELEGRAM_FILE_LIMIT = 49 * 1024 * 1024  # Bot API hard cap is 50MB; stay safely under it
@@ -150,7 +152,7 @@ def run_factory():
         print(f"\n📺 Processing Channel: {ch['name']} (niche: {ch['niche_key']}, lang: {ch['language']})")
         print("-" * 50)
 
-        topic = analyzer.analyze_market(ch["niche_key"])
+        topic = analyzer.analyze_market(ch["niche_key"], channel_id=ch["id"])
         video_result = factory.build_video(
             topic, ch, target_minutes=target_minutes, make_shorts=make_shorts
         )
@@ -194,7 +196,10 @@ def run_factory():
 
         upload_line = ""
         if not skip_upload:
-            metadata = publisher.generate_metadata(topic, ch.get("niche_label", ""), ch["language"])
+            metadata = publisher.generate_metadata(
+                topic, ch.get("niche_label", ""), ch["language"],
+                comment_prompt=video_result.get("outro_text", ""),
+            )
             upload_result = publisher.upload_to_youtube(
                 ch, video_result["video_path"], metadata, thumbnail_path=thumbnail_path
             )
@@ -203,6 +208,28 @@ def run_factory():
                 upload_line = f"\n⚠️ آپلود خودکار یوتیوب: {upload_result['error']}"
             else:
                 perf.log_upload(ch["id"], topic, upload_result["video_id"], upload_result["url"])
+                # Backfill the memory record for this topic with the real
+                # video_id/url now that upload succeeded (record_video()
+                # matches by topic and updates in place instead of duplicating).
+                channel_memory.record_video(
+                    ch["id"], topic, metadata.get("title", topic), video_result["video_path"],
+                    [], video_result["script_engine"],
+                    video_id=upload_result["video_id"], video_url=upload_result["url"],
+                )
+                # Reply to any early comments right away -- comments in the
+                # first 1-2 hours matter most for the algorithm's early
+                # reach signal (see docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md).
+                # This is a best-effort attempt immediately after upload;
+                # ENGAGE-COMMENTS.yml (a separate scheduled workflow) covers
+                # comments that arrive later.
+                service = publisher.build_service(ch)
+                if service is not None:
+                    engage_result = CommentEngager().reply_to_new_comments(
+                        service, upload_result["video_id"], topic, ch["language"]
+                    )
+                    if engage_result.get("replied"):
+                        print(f"[CommentEngager] Replied to {len(engage_result['replied'])} "
+                              f"early comment(s) on {upload_result['video_id']}")
                 print(f"🎉 Channel {ch['name']} updated successfully! {upload_result['url']}")
                 upload_line = f"\n📺 آپلود شد روی یوتیوب: {upload_result['url']}"
                 if upload_result.get("thumbnail_warning"):
