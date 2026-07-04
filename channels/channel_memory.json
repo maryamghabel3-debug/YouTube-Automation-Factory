@@ -82,5 +82,29 @@
       "video_url": "",
       "created_at": "2026-07-04T20:17:34.554927+00:00"
     }
+  ],
+  "true_crime_fa_test": [
+    {
+      "topic": "The cold case that was solved decades later by DNA",
+      "title": "The cold case that was solved decades later by DNA",
+      "video_path": "output/video_1783203955127.mp4",
+      "footage_queries": [
+        "police tape night",
+        "detective office",
+        "old case files",
+        "magnifying glass evidence",
+        "close up eyes",
+        "city noir night",
+        "rain window night",
+        "flashlight dark room",
+        "courtroom",
+        "old case files",
+        "detective office"
+      ],
+      "script_engine": "content_bank",
+      "video_id": "",
+      "video_url": "",
+      "created_at": "2026-07-04T22:29:30.179949+00:00"
+    }
   ]
 }
