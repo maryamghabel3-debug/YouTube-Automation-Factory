@@ -105,6 +105,29 @@
       "video_id": "",
       "video_url": "",
       "created_at": "2026-07-04T22:29:30.179949+00:00"
+    },
+    {
+      "topic": "The forgery that fooled the world's top experts",
+      "title": "The forgery that fooled the world's top experts",
+      "video_path": "output/video_1783211658674.mp4",
+      "footage_queries": [
+        "old manuscript",
+        "ancient code",
+        "science lab",
+        "silver ink",
+        "microscope view",
+        "vintage printing press",
+        "history textbook",
+        "surprised face",
+        "rare coin",
+        "subscribe button",
+        "comment section",
+        "explorer icon"
+      ],
+      "script_engine": "openrouter",
+      "video_id": "",
+      "video_url": "",
+      "created_at": "2026-07-05T00:37:20.793548+00:00"
     }
   ]
 }
