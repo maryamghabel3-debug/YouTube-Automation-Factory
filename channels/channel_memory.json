@@ -151,6 +151,27 @@
       "video_id": "",
       "video_url": "",
       "created_at": "2026-07-05T00:54:26.405323+00:00"
+    },
+    {
+      "topic": "How forensic accounting cracked an impossible fraud",
+      "title": "How forensic accounting cracked an impossible fraud",
+      "video_path": "output/video_1783216451507.mp4",
+      "footage_queries": [
+        "close-up of bank transaction",
+        "corporate skyscraper office",
+        "forensic accountant at desk",
+        "invoice spreadsheet analysis",
+        "small footnote on ledger",
+        "hidden code on receipt",
+        "encrypted code numbers",
+        "money flow map",
+        "large sum of money",
+        "call to action subscribe"
+      ],
+      "script_engine": "openrouter",
+      "video_id": "",
+      "video_url": "",
+      "created_at": "2026-07-05T01:56:53.787248+00:00"
     }
   ]
 }
