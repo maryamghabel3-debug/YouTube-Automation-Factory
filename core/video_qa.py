@@ -72,11 +72,22 @@ def check_audio_loudness(video_path: str) -> dict:
 #    that "the LLM call succeeded" or "the TTS call succeeded" means the
 #    result is understandable.
 # --------------------------------------------------------------------- #
-_MIN_WORD_OVERLAP_RATIO = 0.35  # how much of the source script's vocabulary
-                                # must show up in the transcript for the
-                                # narration to be considered "matches the
-                                # script" rather than badly mispronounced/
-                                # garbled beyond recognition
+# RECALIBRATED 2026-07-05 after the punctuation-stripping fix above exposed
+# that the old 0.35 threshold was actually HIGHER than genuinely-good,
+# correctly-synthesized Persian narration ever scores against Whisper
+# "base" -- meaning the check was failing content_bank's own hand-written
+# scripts, not catching real problems. Measured live, with real TTS audio,
+# real Whisper "base" transcription, and the punctuation fix applied:
+#   - GOOD (correct voice + its own matching script):   overlap 0.266, 0.333
+#   - BAD  (voice for one topic vs a totally different,
+#           unrelated topic's script -- a genuine mismatch): overlap 0.076, 0.096
+# There is a wide, clean gap between those two clusters (~0.27-0.33 for
+# genuinely correct narration vs ~0.08-0.10 for genuinely wrong/garbled
+# content). 0.18 sits in the middle with real margin on both sides, so it
+# actually distinguishes "wrong content" from "Whisper's known weak Persian
+# transcription accuracy even on correct speech" instead of rejecting
+# correct narration like the old 0.35 threshold did.
+_MIN_WORD_OVERLAP_RATIO = 0.18
 
 
 _PERSIAN_ARABIC_PUNCTUATION = "،؛؟٫٬٪۔ـ"
@@ -100,8 +111,19 @@ def _normalize_words(text: str) -> set:
     return {w for w in words if len(w) > 2}
 
 
+# Whisper model size to use for narration-coherence transcription. GitHub
+# Actions' ubuntu-latest runners have ~7GB RAM and can comfortably run
+# "small" (needs ~1GB), which has noticeably better Persian accuracy than
+# "base" (verified via live research: base 10% multilingual WER vs small's
+# 7%, and Persian specifically is a harder-than-average language for
+# Whisper at the smallest sizes). The local dev sandbox only has ~1.9GB
+# total RAM and "small" OOM-crashed there, so it must stay overridable via
+# env var rather than hard-coded, defaulting to the safe "base" size.
+_DEFAULT_WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "base").strip() or "base"
+
+
 def transcribe_and_compare(video_path: str, source_text: str, language: str = "fa",
-                            whisper_model_size: str = "base") -> dict:
+                            whisper_model_size: str = None) -> dict:
     """Transcribes the video's audio with openai-whisper and compares the
     resulting word set against the source narration script. Returns
     {'ok': bool, 'overlap_ratio': float, 'transcript': str} or
@@ -122,8 +144,9 @@ def transcribe_and_compare(video_path: str, source_text: str, language: str = "f
     except ImportError:
         return {"ok": True, "skipped": "openai-whisper not installed"}
 
+    model_size = whisper_model_size or _DEFAULT_WHISPER_MODEL_SIZE
     try:
-        model = whisper.load_model(whisper_model_size)
+        model = whisper.load_model(model_size)
         result = model.transcribe(video_path, language=language)
         transcript = result.get("text", "")
     except Exception as e:

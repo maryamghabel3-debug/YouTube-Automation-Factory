@@ -43,10 +43,34 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-vazirmatn
+      # Speed optimization (2026-07-05): cache pip packages and the Whisper
+      # model weights (openai-whisper re-downloaded ~140-460MB of model
+      # weights from scratch on every single run before this) between runs
+      # instead of re-downloading everything every time -- this was a big
+      # part of why runs had grown from 2-3 min to 5-8 min.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+      - name: Cache Whisper model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-model-small-v1
       - name: Install Python dependencies
         run: pip install -r requirements.txt
       - name: Run the factory
         env:
+          # GitHub Actions ubuntu-latest runners have ~7GB RAM (vs. the local
+          # dev sandbox's ~1.9GB, which OOM-crashes on anything above "base")
+          # so Persian narration-coherence QA transcription can safely use
+          # the more accurate "small" model here (see core/video_qa.py for
+          # the measured accuracy difference and why this matters for
+          # Persian specifically).
+          WHISPER_MODEL_SIZE: 'small'
           # Multi-provider LLM fallback chain (core/llm_router.py) -- script
           # writing, competitor-pattern analysis, and Shorts hook-selection
           # all try these in order so one exhausted quota never stops

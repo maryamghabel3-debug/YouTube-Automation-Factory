@@ -15,6 +15,22 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-vazirmatn
+      # Speed optimization (2026-07-05, requested after "چرا سرعتت اینجا خیلی
+      # پایین اومده" -- CI runs were taking 5-8 min partly because every run
+      # re-downloaded the same pip packages and the Whisper model weights
+      # from scratch with nothing cached between runs.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+      - name: Cache Whisper model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-model-${{ env.WHISPER_MODEL_SIZE || 'base' }}-v1
       - name: Install dependencies
         run: |
           pip install -r requirements.txt

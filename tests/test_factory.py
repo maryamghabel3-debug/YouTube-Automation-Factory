@@ -2148,3 +2148,37 @@ def test_video_qa_run_qa_only_transcribes_for_persian():
     )
     report = video_qa.run_qa(path, "some english narration text", language="en")
     assert "narration_check" not in report
+
+
+def test_video_qa_normalize_words_strips_persian_arabic_punctuation():
+    """Regression test for a real false-positive bug: Persian/Arabic
+    punctuation (، ؛ ؟ etc.) lives in the SAME Unicode block as Persian
+    letters, so it used to stay attached to words (e.g. "سال،") and never
+    matched Whisper's cleaner "سال" -- an artificial mismatch that had
+    nothing to do with actual narration coherence. Verified live: this bug
+    made even the agent's own hand-written, human-quality content_bank
+    script fail the QA overlap check."""
+    from core import video_qa
+
+    a = video_qa._normalize_words("سال، ۱۹۷۶ بود؛ کسی نمی‌دانست؟")
+    b = video_qa._normalize_words("سال ۱۹۷۶ بود کسی نمیدانست")
+    # Words that only differed by trailing Arabic punctuation must now match.
+    assert "سال" in a
+    assert "دانست" in b or "نمیدانست" in b
+
+
+def test_video_qa_overlap_threshold_is_calibrated_between_real_measurements():
+    """Regression test documenting WHY the overlap threshold is 0.18, not
+    the original 0.35. Measured live with real edge-tts Persian audio +
+    real openai-whisper 'base' transcription + the punctuation fix above:
+      - correct voice matched with its OWN correct script: overlap 0.266, 0.333
+      - voice for one topic compared against a totally unrelated topic's
+        script (genuine mismatch): overlap 0.076, 0.096
+    The old 0.35 threshold was HIGHER than genuinely-correct narration ever
+    scores against Whisper 'base' (which has well-documented, mediocre
+    Persian accuracy even on clean input) -- meaning it was rejecting good
+    videos, not catching bad ones. 0.18 sits in the wide gap between the two
+    real measured clusters with margin on both sides."""
+    from core import video_qa
+
+    assert 0.10 < video_qa._MIN_WORD_OVERLAP_RATIO < 0.26
