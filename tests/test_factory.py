@@ -1484,7 +1484,7 @@ def test_footage_quality_prefers_1080p_over_low_res():
     hd_score = score_resolution(1920, 1080)
     low_score = score_resolution(640, 360)
     assert hd_score > low_score
-    assert hd_score == 35.0  # exactly in the ideal 1080p-4K band
+    assert hd_score == 20.0  # exactly in the ideal 1080p-4K band (rebalanced 2026-07-05, round 3)
 
 
 def test_footage_quality_penalizes_below_720p_heavily():
@@ -1500,7 +1500,7 @@ def test_footage_quality_prefers_16_9_aspect_ratio():
     widescreen = score_aspect_ratio(1920, 1080)  # exactly 16:9
     square = score_aspect_ratio(1080, 1080)       # 1:1, needs heavy cropping
     assert widescreen > square
-    assert widescreen == 25.0
+    assert widescreen == 15.0  # rebalanced 2026-07-05, round 3 (was 25.0)
 
 
 def test_footage_quality_duration_fit_penalizes_clips_shorter_than_scene():
@@ -1517,7 +1517,26 @@ def test_footage_quality_query_relevance_rewards_tag_matches():
     high = score_query_relevance("luxury car interior", "luxury car interior leather seats")
     low = score_query_relevance("luxury car interior", "beach sunset waves")
     assert high > low
-    assert high == 20.0  # all 3 significant words matched
+    assert high == 25.0  # all 3 significant words matched (rebalanced 2026-07-05, round 3; was 20.0)
+
+
+def test_footage_quality_search_rank_favors_top_api_result():
+    """BUG FIXED (found by user review 2026-07-05, round 3): a real test
+    video showed footage of programming code for a story about an art
+    forgery. Root cause: Pexels/Pixabay already rank search results by
+    their OWN relevance algorithm (best topical match first), but the
+    scoring function completely discarded that ranking and re-sorted
+    purely by resolution/aspect/duration -- letting an irrelevant clip near
+    the bottom of the results outscore the genuinely on-topic top result
+    if it happened to be marginally higher-resolution. score_search_rank
+    must reward earlier positions in the original API response order."""
+    from core.footage_quality import score_search_rank
+
+    top_result = score_search_rank(rank=0, total_candidates=10)
+    bottom_result = score_search_rank(rank=9, total_candidates=10)
+    assert top_result > bottom_result
+    assert top_result == 25.0
+    assert bottom_result == 0.0
 
 
 def test_footage_quality_pick_best_selects_highest_scoring_candidate():
@@ -1531,6 +1550,23 @@ def test_footage_quality_pick_best_selects_highest_scoring_candidate():
     assert best["width"] == 1920
     assert "_quality_score" in best
     assert "_quality_breakdown" in best
+
+
+def test_footage_quality_pick_best_prefers_relevant_top_result_over_irrelevant_higher_res():
+    """Reproduces the exact real-world failure: an irrelevant candidate
+    that is technically slightly better (resolution) but appears LATE in
+    the search results and has NO tag/description match must lose to the
+    API's own top, clearly on-topic result."""
+    from core.footage_quality import pick_best
+
+    candidates = [
+        {"width": 1920, "height": 1080, "duration": 10, "tags": "art forgery painting canvas",
+         "_id": "relevant_top_result"},
+        {"width": 3840, "height": 2160, "duration": 10, "tags": "programming code screen",
+         "_id": "irrelevant_but_higher_res"},
+    ]
+    best = pick_best("art forgery painting", candidates, needed_duration=6)
+    assert best["_id"] == "relevant_top_result"
 
 
 def test_footage_quality_pick_best_empty_list_returns_empty_dict():
