@@ -79,12 +79,23 @@ _MIN_WORD_OVERLAP_RATIO = 0.35  # how much of the source script's vocabulary
                                 # garbled beyond recognition
 
 
+_PERSIAN_ARABIC_PUNCTUATION = "،؛؟٫٬٪۔ـ"
+
+
 def _normalize_words(text: str) -> set:
-    # Strip common Persian/Arabic diacritics-adjacent punctuation and
-    # half-space (zero-width non-joiner) noise so word comparison isn't
-    # thrown off by formatting differences between the source script and
-    # Whisper's transcription style.
+    # BUG FIXED (found by re-testing this exact module against the agent's
+    # OWN known-good, hand-written content_bank.py script -- it failed the
+    # overlap check too, which meant the check itself was broken, not the
+    # narration). Root cause: Persian/Arabic punctuation marks (، ؛ ؟ etc.)
+    # live INSIDE the same 0600-06FF Unicode block as Persian letters, so
+    # the old regex kept them attached to words (e.g. "سال،" with a
+    # trailing Arabic comma), which then never matched Whisper's cleaner
+    # "سال" -- an artificial mismatch that had nothing to do with actual
+    # narration coherence. Strip Persian/Arabic punctuation explicitly
+    # before extracting words.
     cleaned = text.replace("\u200c", " ")
+    for ch in _PERSIAN_ARABIC_PUNCTUATION:
+        cleaned = cleaned.replace(ch, " ")
     words = re.findall(r"[\u0600-\u06FFa-zA-Z]+", cleaned.lower())
     return {w for w in words if len(w) > 2}
 
