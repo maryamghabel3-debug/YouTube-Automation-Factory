@@ -61,11 +61,22 @@ def _cleanup_intermediate_files():
     ساختی از اینجا پاک کن تا جا نگیره" (delete downloaded footage/photos
     after building the video so it doesn't fill up the disk). The final
     rendered MP4 for each video is uploaded to GitHub BEFORE this runs, so
-    nothing important is lost -- only working/scratch data is deleted."""
-    for d in ("assets/footage", "assets/audio", "assets/work", "assets/thumbnails",
-              "assets/music"):
+    nothing important is lost -- only working/scratch data is deleted.
+
+    BUG FIXED (found in a real batch run): VoiceEngine/StockFootageFetcher/
+    VideoAssembler only create their output directories ONCE, inside
+    __init__ (os.makedirs(..., exist_ok=True)) -- and this script creates
+    ONE VideoFactory instance for the whole batch loop, not one per video.
+    So after this function deleted assets/audio on video #1's cleanup,
+    every subsequent video's edge-tts call failed with
+    "No such file or directory" because the directory never got recreated.
+    Must recreate every directory immediately after removing it."""
+    dirs = ("assets/footage", "assets/audio", "assets/work", "assets/thumbnails",
+            "assets/music")
+    for d in dirs:
         if os.path.isdir(d):
             shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
     # output/*.mp4 (the final rendered videos + shorts) are removed too,
     # ONLY after each one has already been uploaded as a Release asset --
     # see the main loop below, which calls this only after a successful
