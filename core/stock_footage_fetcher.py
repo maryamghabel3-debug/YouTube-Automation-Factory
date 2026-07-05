@@ -211,6 +211,60 @@ class StockFootageFetcher:
             return "", None
 
     # ------------------------------------------------------------------ #
+    # Openverse (no-API-key-required fallback, 2026-07-05) -- when neither
+    # PEXELS_API_KEY nor PIXABAY_API_KEY is configured in this environment,
+    # every scene used to fall straight to a flat gray placeholder frame,
+    # which looks broken to a viewer. Openverse (openverse.org, run by
+    # WordPress/Automattic) indexes openly-licensed (CC/public-domain)
+    # photos from Flickr, museums, etc. and its search API works fully
+    # anonymously with no signup/key at all (rate-limited to ~100
+    # requests/day per IP without a key, which is fine for occasional runs
+    # in this environment -- a real production deployment should still get
+    # free Pexels/Pixabay keys for higher-quality curated stock footage).
+    # license_type=commercial only returns images cleared for commercial
+    # reuse (no NC-restricted licenses), matching the free-and-legal
+    # standard already used for Pexels/Pixabay elsewhere in this file.
+    # ------------------------------------------------------------------ #
+    def _openverse_photo(self, query: str, needed_duration: float = 0.0, exclude_ids: set = None) -> tuple:
+        try:
+            r = self.session.get(
+                "https://api.openverse.org/v1/images/",
+                params={
+                    "q": query, "page_size": 10, "license_type": "commercial",
+                    "aspect_ratio": "wide", "mature": "false",
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            results = r.json().get("results", [])
+            if not results:
+                return "", None
+
+            candidates = [
+                {
+                    "_id": f"openverse_photo_{img.get('id')}",
+                    "width": img.get("width") or 0,
+                    "height": img.get("height") or 0,
+                    "description": img.get("title", "") + " " +
+                                   " ".join(t.get("name", "") for t in (img.get("tags") or [])),
+                    "_url": img.get("url", ""),
+                }
+                for img in results
+                if img.get("url")
+            ]
+            if not candidates:
+                return "", None
+            best = footage_quality.pick_best(query, candidates, exclude_ids=exclude_ids)
+            if not best or not best.get("_url"):
+                return "", None
+            print(f"[StockFootageFetcher] Openverse photo pick score={best['_quality_score']} "
+                  f"breakdown={best['_quality_breakdown']}")
+            return self._download(best["_url"], ext="jpg"), best["_id"]
+        except requests.RequestException as e:
+            print(f"[StockFootageFetcher] Openverse photo error: {e}")
+            return "", None
+
+    # ------------------------------------------------------------------ #
     def _download(self, url: str, ext: str) -> str:
         out_path = os.path.join(_OUT_DIR, f"clip_{int(time.time()*1000)}_{random.randint(0,9999)}.{ext}")
         try:
@@ -247,9 +301,11 @@ class StockFootageFetcher:
         never shown twice in one video."""
         order = (
             [("pexels_video", self._pexels_video), ("pixabay_video", self._pixabay_video),
-             ("pexels_photo", self._pexels_photo), ("pixabay_photo", self._pixabay_photo)]
+             ("pexels_photo", self._pexels_photo), ("pixabay_photo", self._pixabay_photo),
+             ("openverse_photo", self._openverse_photo)]
             if prefer_video
             else [("pexels_photo", self._pexels_photo), ("pixabay_photo", self._pixabay_photo),
+                  ("openverse_photo", self._openverse_photo),
                   ("pexels_video", self._pexels_video), ("pixabay_video", self._pixabay_video)]
         )
         for name, fn in order:

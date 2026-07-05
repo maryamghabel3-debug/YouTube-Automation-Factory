@@ -142,15 +142,22 @@ def test_script_writer_fallback_persian(workdir, monkeypatch):
 # --------------------------------------------------------------------------- #
 # StockFootageFetcher (offline: no keys -> placeholder, never crashes)
 # --------------------------------------------------------------------------- #
-def test_stock_footage_fetcher_falls_back_to_placeholder(workdir, monkeypatch):
+def test_stock_footage_fetcher_falls_back_to_real_photo_without_any_api_keys(workdir, monkeypatch):
+    """Previously (before the Openverse fallback below existed), having no
+    PEXELS_API_KEY/PIXABAY_API_KEY meant every scene got a flat gray
+    placeholder frame -- which looks visibly broken to a viewer. Openverse
+    (openverse.org) indexes openly-licensed photos and its search API works
+    fully anonymously with no signup/key required, so it's now tried before
+    giving up to a placeholder."""
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     monkeypatch.delenv("PIXABAY_API_KEY", raising=False)
     from core.stock_footage_fetcher import StockFootageFetcher
 
     fetcher = StockFootageFetcher()
     result = fetcher.fetch_clip("test query")
-    assert result["source"] == "placeholder"
+    assert result["source"] in ("openverse_photo", "placeholder")
     assert os.path.exists(result["path"])
+
 
 
 def test_stock_footage_fetcher_for_script_attaches_clip_per_scene(workdir, monkeypatch):
