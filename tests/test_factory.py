@@ -754,6 +754,52 @@ def test_script_writer_uses_llm_result_when_available(monkeypatch):
     assert script["scenes"] == fake_scenes
 
 
+def test_script_writer_skips_weak_persian_providers_at_the_source(monkeypatch):
+    """OPTIMIZATION (found via two real live Persian test runs, 2026-07-05):
+    OpenRouter's free models (Llama 3.3 70B / GPT-OSS 120B / Qwen3) were
+    confirmed via live testing to produce grammatically incoherent Persian
+    output even though the API call itself succeeds -- both real attempts
+    were caught by core/video_qa.py's transcription check, but only AFTER
+    wasting a full video render + Whisper transcription cycle. ScriptWriter
+    should exclude these specific providers from the order list for Persian
+    requests at the source, rather than relying solely on catching the
+    failure after the fact."""
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    captured_order = {}
+
+    def fake_generate_json(system_prompt, user_prompt, order=None):
+        captured_order["order"] = order
+        return {"error": "all_providers_failed"}
+
+    monkeypatch.setattr(writer.router, "generate_json", fake_generate_json)
+    writer.write_script("Test Topic", "جنایی و رمزآلود", "fa", target_minutes=1, niche_key="true_crime")
+
+    assert captured_order["order"] is not None
+    assert "openrouter" not in captured_order["order"]
+    assert "kimi_openrouter" not in captured_order["order"]
+    # Providers NOT confirmed weak for Persian should still be tried.
+    assert "groq" in captured_order["order"]
+    assert "gemini" in captured_order["order"]
+
+
+def test_script_writer_does_not_restrict_providers_for_english(monkeypatch):
+    from core.script_writer import ScriptWriter
+
+    writer = ScriptWriter()
+    captured_order = {}
+
+    def fake_generate_json(system_prompt, user_prompt, order=None):
+        captured_order["order"] = order
+        return {"error": "all_providers_failed"}
+
+    monkeypatch.setattr(writer.router, "generate_json", fake_generate_json)
+    writer.write_script("Test Topic", "Finance", "en", target_minutes=1)
+
+    assert captured_order["order"] is None  # uses LLMRouter's default full order
+
+
 # --------------------------------------------------------------------------- #
 # ContentBank — real, hand-written, fact-checked scripts used automatically
 # in place of the generic offline template whenever no LLM provider is

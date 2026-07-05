@@ -78,13 +78,31 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
 
         return system_prompt, user_prompt
 
+    # Providers confirmed via live testing (2026-07-05, two separate real
+    # Persian runs) and via documented, first-hand reports (a GPT-OSS-120B
+    # GitHub discussion: "low quality in translation task like in arabic
+    # and persian language") to produce grammatically incoherent Persian
+    # output, even though the JSON/API call itself "succeeds". Both real
+    # test attempts through openrouter's free models were caught and
+    # blocked by core/video_qa.py's transcription check, but that means an
+    # entire video render + Whisper transcription was wasted each time.
+    # Skip these specific providers for Persian at the SOURCE instead --
+    # core/script_quality.py's validation still runs as a safety net for
+    # any other provider, this is purely an optimization to stop wasting a
+    # full render cycle on a request that's essentially guaranteed to fail.
+    _WEAK_PERSIAN_PROVIDERS = {"openrouter", "kimi_openrouter"}
+
     def _llm_script(self, topic: str, niche_label: str, language: str,
                      target_minutes: int, competitor_insights: str = "",
                      memory_note: str = "") -> tuple:
         system_prompt, user_prompt = self._build_prompt(
             topic, niche_label, language, target_minutes, competitor_insights, memory_note
         )
-        result = self.router.generate_json(system_prompt, user_prompt)
+        order = None
+        if language == "fa":
+            order = [name for name, _ in self.router._PROVIDERS if name not in self._WEAK_PERSIAN_PROVIDERS]
+
+        result = self.router.generate_json(system_prompt, user_prompt, order=order)
         if "data" in result and isinstance(result["data"], list) and result["data"]:
             return result["data"], result["provider"]
         if "error" in result:
