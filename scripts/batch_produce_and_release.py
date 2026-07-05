@@ -86,6 +86,28 @@ def _dummy_channel_cfg(niche_key: str, language: str) -> dict:
     }
 
 
+def _already_published(releaser: GitHubRelease, niche_key: str, language: str, topic: str) -> bool:
+    """Checks existing GitHub Releases for one whose title already matches
+    this niche/topic/language combo -- lets the script be re-run safely
+    after an interruption (this sandbox's background processes do not
+    survive between conversation turns) without re-building and
+    re-publishing videos that already succeeded."""
+    import requests
+    if not (releaser.owner and releaser.repo and releaser.token):
+        return False
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{releaser.owner}/{releaser.repo}/releases",
+            headers=releaser._headers(), params={"per_page": 100}, timeout=20,
+        )
+        if r.status_code != 200:
+            return False
+        marker = f"[{niche_key}/{language}] {topic}"
+        return any(marker in (rel.get("name") or "") for rel in r.json())
+    except Exception:
+        return False
+
+
 def main():
     releaser = GitHubRelease()
     if not (releaser.owner and releaser.repo and releaser.token):
@@ -100,7 +122,14 @@ def main():
         print(f"[{i}/{len(PLAN)}] niche={niche_key} lang={language} topic='{topic}'")
         print("=" * 70)
 
+        if _already_published(releaser, niche_key, language, topic):
+            print(f"⏭️  Already published in an earlier (interrupted) run -- skipping.")
+            results.append({"niche": niche_key, "language": language, "topic": topic,
+                             "status": "already_published"})
+            continue
+
         if not content_bank.has_script(niche_key, language, topic):
+
             print(f"⚠️  No content_bank script for this niche/language/topic combo -- skipping.")
             results.append({"niche": niche_key, "language": language, "topic": topic,
                              "status": "skipped_no_script"})
@@ -155,7 +184,7 @@ def main():
 
         print(f"[QA] Passed. mean_volume={qa_report.get('audio_loudness', {}).get('mean_volume_db')} dB")
 
-        title = f"{actual_topic} | {ch['niche_label']}"
+        title = f"[{niche_key}/{language}] {topic} | {ch['niche_label']}"
         body = (
             f"موضوع: {actual_topic}\n"
             f"نیچ: {ch['niche_label']}\n"
