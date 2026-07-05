@@ -265,11 +265,26 @@ class StockFootageFetcher:
         return {"path": placeholder, "type": "image", "source": "placeholder", "id": None}
 
     def fetch_for_script(self, scenes: list) -> list:
-        """For each scene dict {'text': ..., 'query': ...}, attach a real clip.
+        """For each scene dict {'text': ..., 'query': ...}, attaches:
+          - 'clip': the primary clip (backwards-compatible single clip)
+          - 'extra_clips': additional DIFFERENT real clips for the SAME
+            query, used by VideoAssembler when a scene's narration is long
+            enough to be split into multiple sub-cuts (see
+            core.video_assembler._MAX_SEGMENT_SECONDS).
+
+        BUG FIXED (found by user review 2026-07-05, round 2): the first fix
+        only prevented the exact same clip from being reused ACROSS scenes.
+        But VideoAssembler's scene-splitting (for scenes longer than ~6s)
+        was still re-using that ONE clip for every sub-cut of that same
+        scene, just with a different pan/zoom -- which visually still reads
+        as "the same picture shown again" to a viewer, not a real cut. Now
+        each long scene gets several genuinely different real clips
+        up-front (same search query, different results), one per sub-cut.
+
         Wrapped so a single failed fetch never crashes the whole pipeline.
-        Tracks every clip id already used earlier in THIS call so a script
-        that repeats a search query (or two similar ones) across scenes
-        never ends up showing the exact same footage twice in one video."""
+        Tracks every clip id already used earlier in THIS call (across ALL
+        scenes and all their extra_clips) so nothing repeats anywhere in
+        the finished video."""
         results = []
         used_ids = set()
         for scene in scenes:
@@ -278,15 +293,36 @@ class StockFootageFetcher:
             # used only to bias footage_quality.py toward clips long enough
             # to avoid visible looping -- VideoAssembler computes the exact
             # duration later from real narration timing.
-            estimated_duration = max(len(scene.get("text", "").split()) / 2.5, 1.5)
+            words = len(scene.get("text", "").split())
+            estimated_duration = max(words / 2.5, 1.5)
+            # Same _MAX_SEGMENT_SECONDS logic VideoAssembler uses to decide
+            # how many sub-cuts a scene this long will need, so we fetch
+            # exactly that many DIFFERENT real clips up-front.
+            approx_subcuts = max(1, round(estimated_duration / 6.0))
+
             try:
-                clip = self.fetch_clip(query, needed_duration=estimated_duration, exclude_ids=used_ids)
+                clip = self.fetch_clip(query, needed_duration=estimated_duration / approx_subcuts,
+                                        exclude_ids=used_ids)
             except Exception as e:
                 print(f"[StockFootageFetcher] scene fetch failed ({query}): {e}")
                 clip = {"path": self._placeholder(), "type": "image", "source": "placeholder", "id": None}
             if clip.get("id"):
                 used_ids.add(clip["id"])
-            results.append({**scene, "clip": clip})
+
+            extra_clips = []
+            for _ in range(approx_subcuts - 1):
+                try:
+                    extra = self.fetch_clip(query, needed_duration=estimated_duration / approx_subcuts,
+                                             exclude_ids=used_ids)
+                except Exception as e:
+                    print(f"[StockFootageFetcher] extra sub-cut fetch failed ({query}): {e}")
+                    extra = {}
+                if extra.get("path"):
+                    if extra.get("id"):
+                        used_ids.add(extra["id"])
+                    extra_clips.append(extra)
+
+            results.append({**scene, "clip": clip, "extra_clips": extra_clips})
         return results
 
 

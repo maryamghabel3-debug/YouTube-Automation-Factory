@@ -15,6 +15,7 @@ from .thumbnail_maker import ThumbnailMaker
 from .shorts_maker import ShortsMaker
 from . import content_config as cfg
 from . import channel_memory
+from . import music_library
 
 
 class VideoFactory:
@@ -69,19 +70,32 @@ class VideoFactory:
 
         print(f"[{self.name}] Generating narration ({script['engine']} script, "
               f"{len(script['scenes'])} scenes)")
-        voice_result = self.voice_engine.generate_voiceover(script["full_text"], voice)
+        voice_result = self.voice_engine.generate_voiceover(script["full_text"], voice, language=language)
         if not voice_result.get("audio_path"):
             return {"error": "voiceover_generation_failed", "detail": voice_result.get("error")}
 
         print(f"[{self.name}] Fetching stock footage for {len(script['scenes'])} scenes")
         scenes_with_clips = self.footage_fetcher.fetch_for_script(script["scenes"])
 
-        print(f"[{self.name}] Assembling final video (subtitles + audio mux)")
+        # Background music (explicit user request after reviewing the first
+        # two test videos, which had none): a free, always-available,
+        # niche-appropriate Creative-Commons track from core/music_library.py,
+        # ducked to 12% under the narration by VideoAssembler.build_video
+        # (that ducking/looping logic already existed -- it just never had
+        # any music_path to use before this). Never fails the whole video if
+        # the download doesn't work; simply proceeds silent as before.
+        music_result = music_library.get_track_for_niche(niche_key)
+        music_path = music_result.get("path", "")
+        music_credit = music_result.get("credit", "")
+
+        print(f"[{self.name}] Assembling final video (subtitles + audio mux"
+              f"{' + background music' if music_path else ''})")
         video_result = self.assembler.build_video(
             scenes_with_clips,
             voice_result["audio_path"],
             voice_result["words"],
             language=language,
+            music_path=music_path,
         )
         if video_result.get("error"):
             return video_result
@@ -125,6 +139,7 @@ class VideoFactory:
             "script_engine": script["engine"],
             "competitor_insights": competitor_insights,
             "outro_text": outro_text,
+            "music_credit": music_credit,
             "built_at": datetime.now().isoformat(),
         }
 

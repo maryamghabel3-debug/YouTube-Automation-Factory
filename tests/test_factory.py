@@ -1454,6 +1454,24 @@ def test_generate_metadata_falls_back_to_generic_cta_without_comment_prompt():
     assert "comments" in meta["description"].lower()
 
 
+def test_generate_metadata_includes_music_credit_when_given():
+    """Creative Commons attribution (see core/music_library.py) must be
+    included in the description whenever a background track was used."""
+    from core.auto_publisher import AutoPublisher
+
+    credit = '"Killers" by Kevin MacLeod (incompetech.com)\nLicensed under Creative Commons: By Attribution 4.0 License'
+    meta = AutoPublisher().generate_metadata("Some Topic", "True Crime", "en", music_credit=credit)
+    assert "Kevin MacLeod" in meta["description"]
+    assert "Creative Commons" in meta["description"]
+
+
+def test_generate_metadata_omits_music_section_when_no_credit_given():
+    from core.auto_publisher import AutoPublisher
+
+    meta = AutoPublisher().generate_metadata("Some Topic", "Finance", "en")
+    assert "Kevin MacLeod" not in meta["description"]
+
+
 # --------------------------------------------------------------------------- #
 # FootageQuality — real, explicit, explainable scoring criteria for picking
 # WHICH stock photo/video candidate to use (previously: random.choice over
@@ -1590,8 +1608,191 @@ def test_stock_footage_fetcher_never_repeats_same_clip_within_one_video(workdir,
     assert downloaded_urls == ["http://best.jpg", "http://second.jpg"]
 
 
+def test_stock_footage_fetcher_provides_extra_clips_for_long_scenes(workdir, monkeypatch):
+    """BUG FIXED (found by user review 2026-07-05, round 2): a long scene
+    used to get sub-cuts of the SAME clip (just different pan/zoom), which
+    still visibly reads as a repeated picture. fetch_for_script() must now
+    pre-fetch multiple genuinely DIFFERENT real clips for a scene long
+    enough to need several sub-cuts (see core.video_assembler's
+    _MAX_SEGMENT_SECONDS split), returned as scene['extra_clips']."""
+    monkeypatch.setenv("PEXELS_API_KEY", "fake-key")
+    from core.stock_footage_fetcher import StockFootageFetcher
+
+    call_count = {"n": 0}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            call_count["n"] += 1
+            return {
+                "photos": [
+                    {"id": call_count["n"], "width": 1920, "height": 1080, "alt": "city skyline night",
+                     "src": {"large2x": f"http://clip{call_count['n']}.jpg"}},
+                ]
+            }
+
+    fetcher = StockFootageFetcher()
+    monkeypatch.setattr(fetcher.session, "get", lambda *a, **k: FakeResp())
+    downloaded = []
+    monkeypatch.setattr(fetcher, "_download", lambda url, ext: downloaded.append(url) or url)
+
+    # A very long scene (many words -> long estimated duration -> multiple
+    # sub-cuts expected) should yield extra_clips beyond just the primary one.
+    long_text = " ".join(["word"] * 80)  # ~32s estimated at 2.5 words/sec
+    scenes = [{"text": long_text, "query": "city skyline night"}]
+    results = StockFootageFetcher.fetch_for_script(fetcher, scenes)
+
+    assert len(results) == 1
+    assert results[0]["clip"]["path"]
+    assert len(results[0]["extra_clips"]) >= 1
+    # Every clip (primary + extras) must be genuinely different URLs.
+    all_urls = [results[0]["clip"]["path"]] + [c["path"] for c in results[0]["extra_clips"]]
+    assert len(all_urls) == len(set(all_urls))
+
 
 # --------------------------------------------------------------------------- #
+# MusicLibrary — free, always-available, no-API-key background music
+# (explicit user request after reviewing two silent test videos)
+# --------------------------------------------------------------------------- #
+def test_music_library_returns_niche_appropriate_track(workdir, monkeypatch):
+    from core import music_library
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            return [b"fake mp3 bytes"]
+
+    monkeypatch.setattr(music_library.requests, "get", lambda *a, **k: FakeResp())
+    result = music_library.get_track_for_niche("true_crime")
+    assert result["track"] in music_library._NICHE_TRACKS["true_crime"]
+    assert os.path.exists(result["path"])
+    assert "Kevin MacLeod" in result["credit"]
+    assert "Creative Commons" in result["credit"]
+
+
+def test_music_library_caches_downloaded_track(workdir, monkeypatch):
+    from core import music_library
+
+    call_count = {"n": 0}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            call_count["n"] += 1
+            return [b"fake mp3 bytes" * 100]
+
+    monkeypatch.setattr(music_library.requests, "get", lambda *a, **k: FakeResp())
+    monkeypatch.setattr("random.choice", lambda seq: seq[0])  # deterministic track pick
+
+    music_library.get_track_for_niche("finance")
+    music_library.get_track_for_niche("finance")
+    assert call_count["n"] == 1  # second call served from local cache, no re-download
+
+
+def test_music_library_returns_empty_dict_on_download_failure(workdir, monkeypatch):
+    from core import music_library
+    import requests
+
+    def raise_error(*a, **k):
+        raise requests.RequestException("network down")
+
+    monkeypatch.setattr(music_library.requests, "get", raise_error)
+    result = music_library.get_track_for_niche("psychology")
+    assert result == {}
+
+
+# --------------------------------------------------------------------------- #
+# text_normalizer — converts raw digits to spoken word form before TTS
+# (explicit user complaint: Persian number pronunciation was broken)
+# --------------------------------------------------------------------------- #
+def test_text_normalizer_converts_persian_digits_to_words():
+    from core.text_normalizer import normalize_numbers
+
+    result = normalize_numbers("سال ۱۸۷۲ یه کشتی پیدا شد.", "fa")
+    assert "۱۸۷۲" not in result
+    assert "هزار" in result  # "هزار و هشتصد و هفتاد و دو"
+
+
+def test_text_normalizer_converts_western_digits_in_persian_text():
+    from core.text_normalizer import normalize_numbers
+
+    result = normalize_numbers("در سال 2020 اتفاق افتاد.", "fa")
+    assert "2020" not in result
+    assert "دو هزار" in result
+
+
+def test_text_normalizer_leaves_english_numbers_unchanged():
+    """English narration was reviewed as fine as-is; only Persian number
+    pronunciation was reported as broken -- don't touch other languages."""
+    from core.text_normalizer import normalize_numbers
+
+    text = "This happened in 1976, a long time ago."
+    assert normalize_numbers(text, "en") == text
+
+
+def test_text_normalizer_handles_missing_num2words_gracefully(monkeypatch):
+    from core import text_normalizer
+
+    monkeypatch.setattr(text_normalizer, "num2words", None)
+    text = "سال ۱۸۷۲ یه کشتی پیدا شد."
+    assert text_normalizer.normalize_numbers(text, "fa") == text
+
+
+# --------------------------------------------------------------------------- #
+# VoiceEngine — number normalization + per-language prosody tuning wired
+# into generate_voiceover (explicit user complaint: Persian voice was
+# "weak/limp" and numbers mispronounced)
+# --------------------------------------------------------------------------- #
+def test_voice_engine_applies_persian_prosody_and_normalizes_numbers(workdir, monkeypatch):
+    from core.voice_engine import VoiceEngine
+
+    captured = {}
+
+    async def fake_synthesize(self, text, voice, out_path, rate="+0%", pitch="+0Hz"):
+        captured["text"] = text
+        captured["rate"] = rate
+        captured["pitch"] = pitch
+        with open(out_path, "wb") as f:
+            f.write(b"fake audio")
+        return [{"text": "word", "start": 0.0, "end": 0.5}]
+
+    monkeypatch.setattr(VoiceEngine, "_synthesize", fake_synthesize)
+    engine = VoiceEngine()
+    engine.generate_voiceover("سال ۱۸۷۲ رخ داد.", "fa-IR-FaridNeural", language="fa")
+
+    assert "۱۸۷۲" not in captured["text"]
+    assert captured["rate"] == "+4%"
+    assert captured["pitch"] == "-2Hz"
+
+
+def test_voice_engine_english_keeps_default_prosody(workdir, monkeypatch):
+    from core.voice_engine import VoiceEngine
+
+    captured = {}
+
+    async def fake_synthesize(self, text, voice, out_path, rate="+0%", pitch="+0Hz"):
+        captured["rate"] = rate
+        captured["pitch"] = pitch
+        with open(out_path, "wb") as f:
+            f.write(b"fake audio")
+        return [{"text": "word", "start": 0.0, "end": 0.5}]
+
+    monkeypatch.setattr(VoiceEngine, "_synthesize", fake_synthesize)
+    engine = VoiceEngine()
+    engine.generate_voiceover("This happened in 1976.", "en-US-ChristopherNeural", language="en")
+
+    assert captured["rate"] == "+0%"
+    assert captured["pitch"] == "+0Hz"
+
+
+# --------------------------------------------------------------------------- #
+
 # UsageGuard — empty-string env vars must fall back to defaults, not crash.
 # Real production bug (2026-07-04): GitHub Actions passes an UNSET secret
 # through as an empty string ('${{ secrets.X }}' with no X configured

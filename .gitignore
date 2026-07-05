@@ -7,12 +7,14 @@ __pycache__/
 assets/footage/*
 assets/audio/*
 assets/work/*
+assets/music/*
 output/*.mp4
 
 # Keep directory structure
 !assets/footage/.gitkeep
 !assets/audio/.gitkeep
 !assets/work/.gitkeep
+!assets/music/.gitkeep
 !output/.gitkeep
 
 # Local secrets

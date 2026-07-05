@@ -206,6 +206,7 @@ def run_factory():
             metadata = publisher.generate_metadata(
                 topic, ch.get("niche_label", ""), ch["language"],
                 comment_prompt=video_result.get("outro_text", ""),
+                music_credit=video_result.get("music_credit", ""),
             )
             upload_result = publisher.upload_to_youtube(
                 ch, video_result["video_path"], metadata, thumbnail_path=thumbnail_path

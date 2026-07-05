@@ -224,35 +224,67 @@ Format: Layer, Start, End, Style, Text
             clip = scene.get("clip", {})
             has_clip = bool(clip.get("path") and os.path.exists(clip["path"]))
 
-            # BUG FIXED (found by user review 2026-07-05): a single scene
-            # used to hold ONE static shot for its entire (often 10-14s)
-            # duration with no cut -- far above the ~3-5s visual-change
-            # interval that keeps faceless-channel viewers engaged (see
-            # docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md). Split any scene longer
-            # than _MAX_SEGMENT_SECONDS into multiple shorter sub-cuts of
-            # the SAME clip (no extra footage-API calls needed) -- each
-            # sub-cut uses a different Ken Burns pan direction (images) or a
-            # different start offset (videos) so it reads as a real cut,
-            # not an obvious loop.
+            # BUG FIXED (found by user review 2026-07-05, round 1): a single
+            # scene used to hold ONE static shot for its entire (often
+            # 10-14s) duration with no cut -- far above the ~3-5s
+            # visual-change interval that keeps faceless-channel viewers
+            # engaged (see docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md). Split any
+            # scene longer than _MAX_SEGMENT_SECONDS into multiple shorter
+            # sub-cuts.
+            #
+            # BUG FIXED (round 2, same review): the round-1 fix reused the
+            # SAME source clip for every sub-cut (only varying Ken Burns pan
+            # direction), which still visually reads as "the same picture
+            # shown again," not a real cut. core/stock_footage_fetcher.py's
+            # fetch_for_script() now pre-fetches genuinely DIFFERENT real
+            # clips for a long scene (in scene['extra_clips']) -- use those
+            # for sub-cuts 2, 3, ... instead of repeating sub-cut 1's clip.
+            # Only fall back to re-using the primary clip (with a different
+            # pan) if fewer extra clips came back than sub-cuts needed
+            # (e.g. a very narrow query with few real results available).
+            extra_clips = scene.get("extra_clips", [])
             num_subcuts = max(1, int(duration // _MAX_SEGMENT_SECONDS) + (1 if duration % _MAX_SEGMENT_SECONDS > 1.0 else 0))
             sub_duration = duration / num_subcuts
 
             for sub_i in range(num_subcuts):
                 seg_out = os.path.join(work_dir, f"seg_{i:03d}_{sub_i:02d}.mp4")
                 ok = False
-                if has_clip:
-                    if clip.get("type") == "video":
-                        start_offset = sub_i * (sub_duration * 0.6)  # slight forward skip per sub-cut
-                        ok = self._render_video_segment(clip["path"], sub_duration, seg_out, start_offset=start_offset)
+
+                if sub_i == 0:
+                    sub_clip, is_fallback_repeat = clip, False
+                elif sub_i - 1 < len(extra_clips):
+                    sub_clip, is_fallback_repeat = extra_clips[sub_i - 1], False
+                else:
+                    sub_clip, is_fallback_repeat = clip, True  # no more distinct clips available
+
+                sub_has_clip = bool(sub_clip.get("path") and os.path.exists(sub_clip.get("path", "")))
+                if sub_has_clip:
+                    if sub_clip.get("type") == "video":
+                        # Only need an artificial start-offset when we're
+                        # forced to repeat the same source video (real
+                        # sub-cuts already show a different clip entirely).
+                        start_offset = (sub_i * sub_duration * 0.6) if is_fallback_repeat else 0.0
+                        ok = self._render_video_segment(sub_clip["path"], sub_duration, seg_out, start_offset=start_offset)
                     else:
                         pan = _IMAGE_PAN_CYCLE[sub_i % len(_IMAGE_PAN_CYCLE)]
+                        ok = self._render_image_segment(sub_clip["path"], sub_duration, seg_out, pan_direction=pan)
+                elif has_clip:
+                    # extra_clips entry failed to download -- fall back to
+                    # the scene's primary clip rather than dropping the cut.
+                    pan = _IMAGE_PAN_CYCLE[sub_i % len(_IMAGE_PAN_CYCLE)]
+                    if clip.get("type") == "video":
+                        ok = self._render_video_segment(clip["path"], sub_duration, seg_out,
+                                                         start_offset=sub_i * sub_duration * 0.6)
+                    else:
                         ok = self._render_image_segment(clip["path"], sub_duration, seg_out, pan_direction=pan)
+
                 if ok and os.path.exists(seg_out):
                     segment_paths.append(seg_out)
                 else:
                     print(f"[VideoAssembler] scene {i} sub-cut {sub_i} render failed or missing clip; skipping")
 
         if not segment_paths:
+
             return {"error": "no_segments_rendered"}
 
         # Concat all scene segments (silent) into one video track

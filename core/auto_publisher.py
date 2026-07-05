@@ -86,7 +86,7 @@ class AutoPublisher:
 
     # ------------------------------------------------------------------ #
     def generate_metadata(self, topic: str, niche_label: str = "", language: str = "en",
-                           comment_prompt: str = "") -> dict:
+                           comment_prompt: str = "", music_credit: str = "") -> dict:
         """SEO-oriented title/description/tags. Simple heuristic generator
         (no extra API cost); can be swapped for an LLM call later.
 
@@ -97,7 +97,12 @@ class AutoPublisher:
         instead of watching to the end, and a specific question there
         measurably increases comment volume more than a generic
         "let me know what you think!" (see docs/YOUTUBE-GROWTH-AND-
-        ENGAGEMENT.md for the research this is based on)."""
+        ENGAGEMENT.md for the research this is based on).
+
+        music_credit (optional): the Creative Commons attribution text for
+        the background music track used (see core/music_library.py) -- CC
+        BY licensing requires this be included somewhere reasonably
+        discoverable; the video description is the standard place for it."""
         if language == "fa":
             title = f"{topic} | نکاتی که باید بدانید"
             cta = comment_prompt or "نظرتون درباره این موضوع چیه؟ توی کامنت‌ها بگید."
@@ -116,6 +121,8 @@ class AutoPublisher:
                 f"If you found this valuable, subscribe so you don't miss the next one! 🔔\n\n"
                 f"#{niche_label.replace(' ', '')} #Documentary"
             )
+        if music_credit:
+            description += f"\n\n---\nMusic:\n{music_credit}"
         tags = [niche_label, "documentary", "educational"] if niche_label else ["educational"]
         return {"title": title[:100], "description": description[:5000], "tags": tags}
 

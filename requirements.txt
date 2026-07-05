@@ -11,3 +11,7 @@ google-generativeai>=0.8
 # Needed by core/gh_secrets.py to encrypt values before writing GitHub
 # repo secrets via the REST API (libsodium sealed-box, as GitHub requires).
 pynacl>=1.5
+# Converts raw digits (e.g. "1976", "۱۹۷۶") to spoken word form per language
+# before TTS synthesis -- see core/text_normalizer.py. Fixes real mispronounced-
+# number complaints found via user review of a real Persian test video.
+num2words>=0.5.13
