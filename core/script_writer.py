@@ -134,15 +134,30 @@ if "text" is in {lang_name}. Do not include markdown fences, only the JSON array
 
     def write_script(self, topic: str, niche_label: str = "", language: str = "en",
                       target_minutes: int = 8, competitor_insights: str = "",
-                      channel_id: str = "", niche_key: str = "") -> dict:
+                      channel_id: str = "", niche_key: str = "",
+                      force_content_bank: bool = False) -> dict:
         # channel_memory.py: avoid the script rehashing the same angle this
         # channel already used recently (user-requested "system memory").
         memory_note = channel_memory.summary_for_prompt(channel_id) if channel_id else ""
 
-        scenes, provider = self._llm_script(
-            topic, niche_label, language, target_minutes, competitor_insights, memory_note
-        )
-        engine = provider or ""
+        # force_content_bank (2026-07-05, retry-loop feature): used by
+        # main.py when a PREVIOUS attempt for this exact channel/topic
+        # already had its LLM-written script rejected by VideoQA's real
+        # narration-transcription check after a full render (the language
+        # validation below only catches OBVIOUS garbling cheaply via a
+        # character-ratio heuristic -- it cannot know a script is
+        # genuinely incoherent until it's actually spoken and transcribed,
+        # which only happens after a full render). Rather than trying the
+        # exact same unreliable LLM path again and wasting another full
+        # render+QA cycle, skip straight to the verified-coherent curated
+        # source on retry.
+        if force_content_bank:
+            scenes, engine = [], ""
+        else:
+            scenes, provider = self._llm_script(
+                topic, niche_label, language, target_minutes, competitor_insights, memory_note
+            )
+            engine = provider or ""
 
         if scenes:
             # BUG FIXED (found by user review 2026-07-05, round 4): a

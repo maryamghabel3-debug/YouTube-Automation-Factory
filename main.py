@@ -154,9 +154,53 @@ def run_factory():
         print("-" * 50)
 
         topic = analyzer.analyze_market(ch["niche_key"], channel_id=ch["id"], language=ch["language"])
-        video_result = factory.build_video(
-            topic, ch, target_minutes=target_minutes, make_shorts=make_shorts
-        )
+
+        # RETRY LOOP (2026-07-05, explicit follow-up to the QA agent): before
+        # this, a video whose narration failed the post-render coherence
+        # check was simply abandoned -- an alert was sent and the pipeline
+        # moved on, wasting the whole render and leaving the channel with no
+        # video at all that day. A garbled LLM script can't be known bad
+        # until it's actually rendered and transcribed (that's the whole
+        # point of doing real audio QA instead of just trusting "the LLM
+        # call succeeded"), so on a narration-coherence failure specifically,
+        # retry ONCE with force_content_bank=True -- skip the unreliable LLM
+        # path entirely and use a verified-coherent curated script instead of
+        # repeating the same failure. A loudness failure is NOT retried here:
+        # it indicates a systemic render/mixing bug (like the amix
+        # normalize=1 issue found earlier), not a random per-attempt fluke,
+        # so retrying identically would just fail identically -- that case
+        # still goes straight to a user alert for manual investigation.
+        max_attempts = 2
+        video_result, qa_report = None, None
+        for attempt in range(1, max_attempts + 1):
+            force_content_bank = attempt > 1
+            if force_content_bank:
+                print(f"[Retry {attempt}/{max_attempts}] Narration QA failed last attempt -- "
+                      f"retrying '{ch['name']}' with a verified-coherent content_bank script "
+                      f"instead of the LLM.")
+            video_result = factory.build_video(
+                topic, ch, target_minutes=target_minutes, make_shorts=make_shorts,
+                force_content_bank=force_content_bank,
+            )
+            if video_result.get("error"):
+                break  # a build error isn't something a content_bank retry can fix
+
+            attempt_topic = video_result.get("topic", topic)
+            qa_report = video_qa.run_qa(
+                video_result["video_path"], video_result.get("full_narration_text", ""),
+                language=ch["language"],
+            )
+            if qa_report.get("ok"):
+                break
+
+            narration_check = qa_report.get("narration_check", {})
+            narration_failed = narration_check and not narration_check.get("ok", True)
+            loudness_failed = not qa_report.get("audio_loudness", {}).get("ok", True)
+            if loudness_failed or not narration_failed or attempt >= max_attempts:
+                break  # nothing left to retry, or this failure mode can't be fixed by retrying
+            print(f"⚠️  QA rejected attempt {attempt} for {ch['name']}: narration overlap "
+                  f"{narration_check.get('overlap_ratio')} -- will retry.")
+
         # Mark the schedule as consumed regardless of success/failure -- a
         # failed attempt still spent real LLM/API calls, so a broken
         # channel shouldn't retry every single day and multiply that cost.

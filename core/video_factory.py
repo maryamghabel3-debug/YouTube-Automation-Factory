@@ -30,7 +30,7 @@ class VideoFactory:
         self.shorts_maker = ShortsMaker()
 
     def build_video(self, topic: str, channel_cfg: dict, target_minutes: int = 8,
-                     make_shorts: bool = True) -> dict:
+                     make_shorts: bool = True, force_content_bank: bool = False) -> dict:
         """Full real pipeline for one channel/topic. Returns
         {'video_path', 'duration', 'thumbnail_path', 'shorts': [...], ...}
         or {'error': ...}."""
@@ -54,6 +54,7 @@ class VideoFactory:
         script = self.script_writer.write_script(
             topic, niche_label, language, target_minutes, competitor_insights,
             channel_id=channel_id, niche_key=niche_key,
+            force_content_bank=force_content_bank,
         )
         if not script.get("scenes"):
             return {"error": "script_generation_failed"}
