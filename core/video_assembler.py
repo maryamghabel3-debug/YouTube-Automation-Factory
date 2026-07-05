@@ -317,11 +317,24 @@ Format: Layer, Start, End, Style, Text
         # Mux narration audio (+ optional ducked background music) onto video
         final_path = os.path.join(_OUT_DIR, f"video_{session_id}.mp4")
         if music_path and os.path.exists(music_path):
-            # Narration full volume, music ducked to 12% and looped to match length
+            # BUG FIXED (found by user review 2026-07-05, round 4 -- "couldn't
+            # understand what he's saying"): ffmpeg's amix filter defaults to
+            # normalize=1 (true), which SILENTLY rescales every input by
+            # 1/inputs (i.e. cuts narration to 50% of its set volume for a
+            # 2-input mix) to guarantee no clipping -- regardless of the
+            # per-track volume= filters applied beforehand. Measured live:
+            # normalize=1 produced a mix ~6 dB quieter than normalize=0 for
+            # the exact same inputs -- an very audible "half as loud"
+            # difference, exactly matching the complaint. Fixed by adding
+            # normalize=0 (we already explicitly control each track's
+            # loudness via volume=1.0 / volume=0.12) plus a limiter on the
+            # final mix to prevent any clipping now that amix stops doing
+            # it for us.
             filter_complex = (
                 "[1:a]volume=1.0[narr];"
                 "[2:a]volume=0.12,aloop=loop=-1:size=2e9[music];"
-                "[narr][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                "[narr][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[premix];"
+                "[premix]alimiter=limit=0.95[aout]"
             )
             ok = self._run(
                 ["ffmpeg", "-y", "-i", video_with_subs, "-i", audio_path, "-i", music_path,

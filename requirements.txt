@@ -15,3 +15,8 @@ pynacl>=1.5
 # before TTS synthesis -- see core/text_normalizer.py. Fixes real mispronounced-
 # number complaints found via user review of a real Persian test video.
 num2words>=0.5.13
+# Real QA pass (core/video_qa.py, explicit user request): transcribes the
+# finished video's narration and compares it against the source script to
+# catch garbled/incoherent output BEFORE delivery, instead of the agent only
+# spot-checking a few video frames by eye. Runs locally, no API cost.
+openai-whisper>=20231117

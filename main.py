@@ -35,6 +35,7 @@ from core.gh_release import GitHubRelease
 from core import telegram_notify
 from core import schedule_guard
 from core import channel_memory
+from core import video_qa
 from core.comment_engager import CommentEngager
 
 _DB_PATH = "channels/database.json"
@@ -176,6 +177,47 @@ def run_factory():
         # failed). Use the ACTUAL topic that was narrated for everything
         # downstream: delivery caption, YouTube title/description, memory.
         topic = video_result.get("topic", topic)
+
+        # REAL QA PASS (explicit user request 2026-07-05: "قبل از اینکه
+        # ویدیو رو برام بفرسته خودش ویدیو رو چک کنه" -- "before sending me
+        # the video, [the agent] should check it itself"). Actually measures
+        # the finished video's audio loudness (catches the ffmpeg amix
+        # normalize=1 bug class -- narration silently mixed too quiet to
+        # hear under music) and, for Persian, transcribes the narration with
+        # openai-whisper and compares it against the source script (catches
+        # a garbled/incoherent LLM-written script slipping through, which is
+        # exactly what happened with a free OpenRouter model in a real test
+        # video). A video that fails is NOT silently delivered -- the user
+        # is alerted instead, with the specific reason, so a broken video
+        # never just "goes out" unnoticed again.
+        print(f"[QA] Running automated checks (audio loudness"
+              f"{', Persian narration transcription' if ch['language'] == 'fa' else ''}) before delivery...")
+        qa_report = video_qa.run_qa(
+            video_result["video_path"], video_result.get("full_narration_text", ""),
+            language=ch["language"],
+        )
+        if not qa_report.get("ok"):
+            print(f"⚠️  QA FAILED for {ch['name']}: {qa_report}")
+            qa_lines = []
+            loudness = qa_report.get("audio_loudness", {})
+            if not loudness.get("ok", True):
+                qa_lines.append(f"🔇 صدای روایت خیلی کمه (mean_volume={loudness.get('mean_volume_db')} dB)")
+            narration_check = qa_report.get("narration_check", {})
+            if not narration_check.get("ok", True):
+                qa_lines.append(
+                    f"🗣 متن روایت‌شده با اسکریپت اصلی همخوانی کافی نداره "
+                    f"(تطابق: {narration_check.get('overlap_ratio', 0)*100:.0f}٪) -- "
+                    f"رونوشت واقعی: «{narration_check.get('transcript', '')[:200]}»"
+                )
+            telegram_notify.send(
+                f"⚠️ *ویدیوی «{ch['name']}» ساخته شد ولی در بررسی کیفیت خودکار رد شد -- ارسال نشد.*\n\n"
+                f"موضوع: {topic}\n\n" + "\n".join(qa_lines) +
+                f"\n\nاین ویدیو نیاز به بررسی دستی یا ساخت مجدد داره."
+            )
+            continue
+        print(f"[QA] Passed. mean_volume={qa_report.get('audio_loudness', {}).get('mean_volume_db')} dB"
+              + (f", narration_overlap={qa_report.get('narration_check', {}).get('overlap_ratio')}"
+                 if "narration_check" in qa_report else ""))
 
         thumbnail_path = video_result.get("thumbnail_path", "")
         shorts = video_result.get("shorts", [])

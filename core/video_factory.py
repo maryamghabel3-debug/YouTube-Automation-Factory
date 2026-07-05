@@ -140,6 +140,8 @@ class VideoFactory:
             "competitor_insights": competitor_insights,
             "outro_text": outro_text,
             "music_credit": music_credit,
+            "full_narration_text": script["full_text"],
+            "language": language,
             "built_at": datetime.now().isoformat(),
         }
 
