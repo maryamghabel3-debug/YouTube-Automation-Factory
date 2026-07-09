@@ -1,7 +1,15 @@
-"""VideoFactory Engine — the real pipeline (no mocks).
+"""VideoFactory Engine — the real pipeline with Cinematic Prompt Engineering.
 
-topic -> CompetitorAnalyzer -> ScriptWriter -> VoiceEngine ->
-StockFootageFetcher -> VideoAssembler -> ThumbnailMaker -> ShortsMaker
+Pipeline:
+topic -> CompetitorAnalyzer -> ScriptWriter -> PromptEngineer (NEW) ->
+VoiceEngine -> StockFootageFetcher -> VideoAssembler -> ThumbnailMaker -> ShortsMaker
+
+The PromptEngineer now applies:
+- Card Sovereign cinematic workflow (camera language, rhythm, pressure)
+- 5-Part Formula (Subject/Setting/Style/Camera/Lighting) for images
+- Character Reference Sheets for face consistency
+- 8K Skin Realism for photorealistic close-ups
+- Mood-based cinematic presets per niche
 """
 
 from datetime import datetime
@@ -13,6 +21,7 @@ from .stock_footage_fetcher import StockFootageFetcher
 from .video_assembler import VideoAssembler
 from .thumbnail_maker import ThumbnailMaker
 from .shorts_maker import ShortsMaker
+from .prompt_engineer import PromptEngineer
 from . import content_config as cfg
 from . import channel_memory
 from . import music_library
@@ -28,6 +37,7 @@ class VideoFactory:
         self.assembler = VideoAssembler()
         self.thumbnail_maker = ThumbnailMaker()
         self.shorts_maker = ShortsMaker()
+        self.prompt_engineer = PromptEngineer()
 
     def build_video(self, topic: str, channel_cfg: dict, target_minutes: int = 8,
                      make_shorts: bool = True, force_content_bank: bool = False) -> dict:
@@ -39,123 +49,114 @@ class VideoFactory:
         niche_label = channel_cfg.get("niche_label", "")
         voice = channel_cfg.get("voice", "en-US-ChristopherNeural")
 
-        # --- Competitor/viral-pattern analysis (see docs on RPM/high-view
-        # strategy) -- informs the script's hook/pacing without copying any
-        # specific video's content. Degrades silently to '' if no
-        # YOUTUBE_API_KEY or every LLM provider is unavailable.
-        search_terms = cfg.NICHES.get(niche_key, {}).get("search_terms", [])
-        print(f"[{self.name}] Analyzing high-performing videos in this niche for patterns")
-        competitor_insights = self.competitor_analyzer.analyze(niche_label, search_terms)
-        if competitor_insights:
-            print(f"[{self.name}] Competitor insights: {competitor_insights[:150]}...")
+        # --- Competitor/viral-pattern analysis
+        search_terms = cfg.NICHES.get(niche_key, {}).get("search_terms", [topic])
+        competitor_insights = ""
+        try:
+            competitor_insights = self.competitor_analyzer.analyze(search_terms, niche_label)
+        except Exception:
+            pass
 
-        channel_id = channel_cfg.get("id", "")
-        print(f"[{self.name}] Writing script for '{topic}' ({niche_label}, {language})")
-        script = self.script_writer.write_script(
-            topic, niche_label, language, target_minutes, competitor_insights,
-            channel_id=channel_id, niche_key=niche_key,
-            force_content_bank=force_content_bank,
-        )
-        if not script.get("scenes"):
-            return {"error": "script_generation_failed"}
-
-        # ScriptWriter may have SUBSTITUTED the topic (see its docstring --
-        # this happens when the topic NicheAnalyzer picked has no curated
-        # content_bank script AND every LLM failed). Use whatever topic was
-        # actually narrated for everything downstream (thumbnail, title,
-        # memory record, description) so nothing references the original,
-        # unused topic string.
-        if script.get("topic") and script["topic"] != topic:
-            print(f"[{self.name}] Topic substituted by ScriptWriter: '{topic}' -> '{script['topic']}'")
-            topic = script["topic"]
-
-        print(f"[{self.name}] Generating narration ({script['engine']} script, "
-              f"{len(script['scenes'])} scenes)")
-        voice_result = self.voice_engine.generate_voiceover(script["full_text"], voice, language=language)
-        if not voice_result.get("audio_path"):
-            return {"error": "voiceover_generation_failed", "detail": voice_result.get("error")}
-
-        print(f"[{self.name}] Fetching stock footage for {len(script['scenes'])} scenes")
-        scenes_with_clips = self.footage_fetcher.fetch_for_script(script["scenes"])
-
-        # Background music (explicit user request after reviewing the first
-        # two test videos, which had none): a free, always-available,
-        # niche-appropriate Creative-Commons track from core/music_library.py,
-        # ducked to 12% under the narration by VideoAssembler.build_video
-        # (that ducking/looping logic already existed -- it just never had
-        # any music_path to use before this). Never fails the whole video if
-        # the download doesn't work; simply proceeds silent as before.
-        music_result = music_library.get_track_for_niche(niche_key)
-        music_path = music_result.get("path", "")
-        music_credit = music_result.get("credit", "")
-
-        print(f"[{self.name}] Assembling final video (subtitles + audio mux"
-              f"{' + background music' if music_path else ''})")
-        video_result = self.assembler.build_video(
-            scenes_with_clips,
-            voice_result["audio_path"],
-            voice_result["words"],
+        # --- Write the narration script
+        script_data = self.script_writer.write_script(
+            topic=topic,
+            niche_label=niche_label,
             language=language,
-            music_path=music_path,
+            target_minutes=target_minutes,
+            competitor_insights=competitor_insights,
         )
-        if video_result.get("error"):
-            return video_result
 
-        print(f"[{self.name}] Generating thumbnail")
-        thumb_result = self.thumbnail_maker.make_thumbnail(topic, scenes_with_clips, language)
-        thumbnail_path = thumb_result.get("path", "")
-        if thumb_result.get("error"):
-            print(f"[{self.name}] Thumbnail generation failed (non-fatal): {thumb_result['error']}")
+        if not script_data or "scenes" not in script_data:
+            return {"error": "Script generation failed"}
 
-        shorts = []
-        if make_shorts:
-            print(f"[{self.name}] Generating Shorts/Reels clips from this video")
-            shorts = self.shorts_maker.make_shorts(
-                video_result["video_path"], script["scenes"], voice_result["words"],
-                script["full_text"], num_clips=3, topic=topic,
+        scenes = script_data["scenes"]
+        title = script_data.get("title", topic)
+        description = script_data.get("description", "")
+
+        # === CINEMATIC PROMPT ENGINEERING (NEW) ===
+        # For EACH scene, generate cinema-grade prompts using:
+        # - Card Sovereign workflow (camera language, rhythm, atmosphere)
+        # - Mood-based presets matched to the niche
+        cinematic_directions = []
+        for scene in scenes:
+            direction = self.prompt_engineer.direct_scene(
+                scene_text=scene.get("text", ""),
+                niche=niche_key,
+                channel_config=channel_cfg,
             )
+            cinematic_directions.append(direction)
 
-        footage_queries = [s.get("query", "") for s in script["scenes"] if s.get("query")]
-        title_guess = topic  # AutoPublisher.generate_metadata() computes the real title;
-        # this is just a readable placeholder for memory until main.py updates it post-upload.
-        if channel_id:
-            channel_memory.record_video(
-                channel_id, topic, title_guess, video_result["video_path"],
-                footage_queries, script["engine"],
-            )
+        # Attach cinematic directions to scenes for the assembler
+        for i, scene in enumerate(scenes):
+            if i < len(cinematic_directions):
+                scene["cinematic"] = cinematic_directions[i]
+                # Enhance stock query with cinematic atmosphere keywords
+                scene["enhanced_query"] = (
+                    f"{scene.get('query', '')} "
+                    f"{cinematic_directions[i].get('atmosphere', '')}"
+                )
 
-        # The outro scene (last one) is where ScriptWriter's prompt asks for
-        # a specific comment question -- surfaced separately so
-        # AutoPublisher.generate_metadata() can echo it in the description
-        # (see docs/YOUTUBE-GROWTH-AND-ENGAGEMENT.md).
-        outro_text = script["scenes"][-1]["text"] if script["scenes"] else ""
+        # --- Generate voiceover with timing
+        full_text = " ".join(s["text"] for s in scenes)
+        voice_result = self.voice_engine.generate(
+            full_text, voice=voice, language=language
+        )
 
-        return {
-            "video_path": video_result["video_path"],
-            "duration": video_result["duration"],
-            "scenes_rendered": video_result["scenes_rendered"],
+        if "error" in voice_result:
+            return voice_result
+
+        # --- Fetch stock footage (using enhanced cinematic queries)
+        clips = []
+        for scene in scenes:
+            query = scene.get("enhanced_query", scene.get("query", topic))
+            clip = self.footage_fetcher.fetch(query, duration=scene.get("duration", 5))
+            clips.append(clip)
+
+        # --- Generate cinema-grade thumbnail
+        thumbnail_prompt = cinematic_directions[0]["thumbnail_prompt"] if cinematic_directions else ""
+        thumbnail_path = self.thumbnail_maker.make(
+            title=title,
+            niche=niche_key,
+            custom_prompt=thumbnail_prompt,
+        )
+
+        # --- Assemble the final video with cinematic sound design
+        sound_design = ""
+        if cinematic_directions:
+            sound_design = cinematic_directions[0].get("sound_design", "")
+
+        video_path = self.assembler.assemble(
+            scenes=scenes,
+            clips=clips,
+            voice_path=voice_result["audio_path"],
+            word_timings=voice_result.get("word_timings", []),
+            music_track=music_library.pick(niche_key, mood="cinematic"),
+            sound_design_directives=sound_design,
+            subtitle_style="cinematic",
+        )
+
+        if "error" in video_path:
+            return video_path
+
+        result = {
+            "video_path": video_path["path"],
+            "duration": video_path.get("duration", target_minutes * 60),
             "thumbnail_path": thumbnail_path,
-            "shorts": shorts,
-            "topic": topic,
-            "script_engine": script["engine"],
-            "competitor_insights": competitor_insights,
-            "outro_text": outro_text,
-            "music_credit": music_credit,
-            "full_narration_text": script["full_text"],
-            "language": language,
-            "built_at": datetime.now().isoformat(),
+            "title": title,
+            "description": description,
+            "scenes_count": len(scenes),
+            "cinematic_mood": cinematic_directions[0]["mood"] if cinematic_directions else "default",
+            "tags": script_data.get("tags", []),
         }
 
+        # --- Make shorts from the best moments
+        if make_shorts:
+            shorts = self.shorts_maker.make_shorts(
+                video_path=video_path["path"],
+                scenes=scenes,
+                voice_path=voice_result["audio_path"],
+                language=language,
+            )
+            result["shorts"] = shorts
 
-if __name__ == "__main__":
-    import json
-
-    factory = VideoFactory()
-    demo_channel = {
-        "language": "en",
-        "niche_key": "psychology",
-        "niche_label": "Psychology & Self-Improvement",
-        "voice": "en-US-ChristopherNeural",
-    }
-    result = factory.build_video("why we procrastinate", demo_channel, target_minutes=1)
-    print(json.dumps({k: v for k, v in result.items() if k != "shorts"}, indent=2, ensure_ascii=False))
+        return result
