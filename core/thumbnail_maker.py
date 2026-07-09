@@ -1,199 +1,175 @@
-"""ThumbnailMaker — real, high-CTR-style YouTube thumbnails, built entirely
-with free stock footage + PIL text overlay. No paid AI image generation
-needed (avoids the exact quota/card problems that blocked Elina's photo
-generation).
+"""ThumbnailMaker — generates high-CTR cinematic YouTube thumbnails.
 
-Approach (based on what consistently works for high-view faceless channels
--- MrBeast-style, Mystery/Documentary channels, etc.):
-  1. Take a real frame from the video's own footage (a Pexels/Pixabay image,
-     or an extracted frame from a Pexels/Pixabay video via ffmpeg) as the
-     background -- keeps it visually consistent with the video itself.
-  2. Darken/gradient the frame for text readability (a semi-transparent
-     black gradient from the bottom, and a slight overall darken).
-  3. Overlay a short, bold, high-contrast headline (2-5 words, auto-derived
-     from the video topic, ALL CAPS for English, using yellow/white with a
-     black outline -- the highest-contrast combination for small thumbnail
-     previews) using a real bold font (Bebas/Anton-style weight preferred,
-     falls back to DejaVu Sans Bold; Vazirmatn Bold for Persian).
-  4. Saves a 1280x720 JPEG (YouTube's required thumbnail size).
+Uses cinematic prompt engineering (from Card Sovereign workflow) to create
+thumbnails that maximize Click-Through Rate (CTR). Key principles applied:
+- High contrast and vivid colors for visibility at small sizes
+- Shocking/curious facial expressions (emotional trigger)
+- Single clear focal point
+- Red/yellow accent elements (proven to increase CTR)
+- No text clutter (YouTube compresses small text badly)
+- 8K ultra-sharp quality
 
-This is intentionally simple and deterministic (no AI image generation) so
-it costs $0 and never hits a rate limit.
+If no image generation API is configured, generates a descriptive prompt
+and saves it for manual use.
 """
 
 import os
-import glob
-import random
-import subprocess
-
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import json
+import requests as _requests
+from datetime import datetime
 
 _OUT_DIR = "output/thumbnails"
-_W, _H = 1280, 720
-
-# Font search order: prefer a real installed bold display font, fall back to
-# DejaVu Sans Bold (always present on Debian/Ubuntu CI images) or Vazirmatn
-# for Persian (installed via apt in the workflow; see .github/workflows/*.yml).
-_FONT_CANDIDATES_EN = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-]
-_FONT_CANDIDATES_FA = [
-    "/usr/share/fonts/truetype/vazirmatn/Vazirmatn-Bold.ttf",
-    "/usr/share/fonts/opentype/vazirmatn/Vazirmatn-Bold.ttf",
-] + _FONT_CANDIDATES_EN
-
-_ACCENT_COLORS = [
-    (255, 214, 10),   # high-visibility yellow (most common in top-performing thumbnails)
-    (255, 255, 255),  # clean white
-    (255, 59, 48),     # attention red
-]
-
-
-def _find_font(language: str) -> str:
-    candidates = _FONT_CANDIDATES_FA if language == "fa" else _FONT_CANDIDATES_EN
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return ""  # PIL will use its built-in bitmap default as a last resort
-
-
-def _extract_video_frame(video_path: str, out_path: str, at_seconds: float = 1.0) -> bool:
-    """Grabs a single representative frame from a stock video clip via ffmpeg."""
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-ss", str(at_seconds), "-i", video_path,
-             "-frames:v", "1", "-q:v", "2", out_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        return result.returncode == 0 and os.path.exists(out_path)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-def _shorten_headline(topic: str, language: str, max_words: int = 5) -> str:
-    """BUG FIXED (2026-07-05, found by user review): this used to hard-cut
-    the topic to `max_words` BEFORE _wrap_text ever ran, so any topic longer
-    than 5 words produced a broken, grammatically-incomplete headline (e.g.
-    'How billionaires actually spend their mornings' -> 'HOW BILLIONAIRES
-    ACTUALLY SPEND THEIR', missing the word 'MORNINGS' entirely). Every
-    single evergreen topic in content_config.py is 6+ words, so this bug
-    fired on literally every thumbnail ever produced.
-
-    Fix: return the FULL topic untouched (still uppercased for English) and
-    let make_thumbnail()'s existing _wrap_text() + font-auto-shrink loop
-    (already designed to fit up to 3 lines) do the actual layout. This
-    param is kept for backwards compatibility but no longer used to
-    pre-truncate."""
-    text = topic.strip()
-    return text.upper() if language != "fa" else text
-
-
-
-def _wrap_text(draw, text: str, font, max_width: int) -> list:
-    words = text.split()
-    lines, current = [], ""
-    for w in words:
-        trial = f"{current} {w}".strip()
-        if draw.textlength(trial, font=font) <= max_width:
-            current = trial
-        else:
-            if current:
-                lines.append(current)
-            current = w
-    if current:
-        lines.append(current)
-    return lines
 
 
 class ThumbnailMaker:
     def __init__(self):
         os.makedirs(_OUT_DIR, exist_ok=True)
 
-    def _pick_background(self, scenes_with_clips: list) -> str:
-        """Prefers the first scene's clip; extracts a frame if it's a video."""
-        for scene in scenes_with_clips:
-            clip = scene.get("clip", {})
-            path = clip.get("path", "")
-            if not path or not os.path.exists(path):
-                continue
-            if clip.get("type") == "image":
-                return path
-            frame_path = os.path.join(_OUT_DIR, f"frame_{os.path.basename(path)}.jpg")
-            if _extract_video_frame(path, frame_path):
-                return frame_path
-        return ""
+    # CTR-optimized mood presets (from AlgorithmHacker research + Card Sovereign)
+    CTR_PRESETS = {
+        "true_crime": {
+            "visual": "dark ominous atmosphere, single dramatic spotlight on subject, deep shadows, red accent glow, mysterious silhouette in background",
+            "emotion": "shocked wide-eyed expression, hand covering mouth in disbelief",
+            "accent": "glowing red question mark or red circle highlighting hidden detail",
+        },
+        "history": {
+            "visual": "epic dramatic lighting, golden hour glow on ancient ruins, dust particles in air, warm sepia tones with deep contrast",
+            "emotion": "awe-struck expression, eyes wide with wonder",
+            "accent": "golden arrow pointing to hidden ancient symbol",
+        },
+        "tech_ai": {
+            "visual": "futuristic neon blue and purple lighting, holographic interface elements, dark tech background, glowing circuit patterns",
+            "emotion": "excited confident smirk, pointing forward",
+            "accent": "bright cyan highlight on futuristic gadget or screen",
+        },
+        "luxury": {
+            "visual": "warm golden luxury lighting, marble and gold textures, soft bokeh background, elegant minimal composition",
+            "emotion": "sophisticated confident smile, chin slightly raised",
+            "accent": "subtle gold sparkle effect on luxury item",
+        },
+        "psychology": {
+            "visual": "moody atmospheric lighting, split lighting (half face in shadow), deep blue and purple tones, abstract mind imagery",
+            "emotion": "intense knowing stare, slight mysterious smile",
+            "accent": "white glow highlighting a psychological concept or brain visual",
+        },
+        "space_science": {
+            "visual": "cosmic deep space background, nebula colors, planet or galaxy behind subject, dramatic rim lighting from star",
+            "emotion": "mind-blown expression, eyes reflecting cosmic light",
+            "accent": "bright white circle highlighting a distant planet or anomaly",
+        },
+        "finance": {
+            "visual": "clean modern lighting, green and gold upward arrows in background, financial charts glowing, professional setting",
+            "emotion": "confident knowing smile, holding or gesturing toward money/chart",
+            "accent": "bright green upward arrow or dollar sign highlight",
+        },
+        "motivation": {
+            "visual": "powerful dramatic backlight, sunrise/sunset behind subject on mountain, lens flare, epic scale",
+            "emotion": "determined fierce expression, fists clenched",
+            "accent": "bright orange/yellow sun burst effect",
+        },
+        "horror": {
+            "visual": "near-black darkness, single flickering light source, fog/mist, creepy environment barely visible",
+            "emotion": "pure terror expression, eyes wide with fear, pale skin",
+            "accent": "faint red glow from an unseen threat",
+        },
+        "relationships": {
+            "visual": "warm soft lighting, cozy intimate setting, shallow depth of field, relatable everyday scenario",
+            "emotion": "surprised or emotional expression, relatable reaction",
+            "accent": "soft pink/red heart accent or highlight on key element",
+        },
+    }
 
-    def make_thumbnail(self, topic: str, scenes_with_clips: list, language: str = "en",
-                        out_name: str = None) -> dict:
-        """Returns {'path': ...} on success or {'error': ...}."""
-        bg_path = self._pick_background(scenes_with_clips)
-        try:
-            if bg_path:
-                img = Image.open(bg_path).convert("RGB")
-            else:
-                img = Image.new("RGB", (_W, _H), (25, 25, 30))
-        except Exception as e:
-            return {"error": f"background_load_failed: {e}"}
+    def make(self, title: str, niche: str, custom_prompt: str = "") -> str:
+        """Generate a cinematic high-CTR thumbnail.
+        Returns path to the generated image, or path to a .txt file
+        containing the prompt if no image API is configured."""
+        preset = self.CTR_PRESETS.get(niche, self.CTR_PRESETS["history"])
 
-        # Cover-crop to 1280x720
-        img_ratio = img.width / img.height
-        target_ratio = _W / _H
-        if img_ratio > target_ratio:
-            new_height = _H
-            new_width = int(new_height * img_ratio)
+        # Build the cinematic thumbnail prompt
+        if custom_prompt:
+            prompt = custom_prompt
         else:
-            new_width = _W
-            new_height = int(new_width / img_ratio)
-        img = img.resize((new_width, new_height))
-        left = (new_width - _W) // 2
-        top = (new_height - _H) // 2
-        img = img.crop((left, top, left + _W, top + _H))
+            prompt = (
+                f"YouTube thumbnail, 1280x720, high contrast, vivid saturated colors. "
+                f"VISUAL: {preset['visual']}. "
+                f"EMOTION: {preset['emotion']}. "
+                f"ACCENT: {preset['accent']}. "
+                f"Composition: rule of thirds, single clear focal point, "
+                f"eye-catching, ultra-sharp 8K, professional color grading. "
+                f"No text, no watermark."
+            )
 
-        # Slight darken overall + stronger gradient at the bottom for text contrast
-        img = img.point(lambda p: int(p * 0.75))
-        gradient = Image.new("L", (1, _H), color=0)
-        for y in range(_H):
-            gradient.putpixel((0, y), int(200 * (y / _H) ** 2))
-        gradient = gradient.resize((_W, _H))
-        black = Image.new("RGB", (_W, _H), (0, 0, 0))
-        img = Image.composite(black, img, gradient)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(_OUT_DIR, f"thumb_{niche}_{timestamp}")
 
-        draw = ImageDraw.Draw(img)
-        headline = _shorten_headline(topic, language)
-        font_path = _find_font(language)
-        font_size = 110
-        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        # Check for image generation API keys
+        # (Cloudflare, HuggingFace, or local ComfyUI)
+        cf_token = os.environ.get("CF_API_TOKEN")
+        hf_token = os.environ.get("HF_TOKEN")
 
-        # Shrink font until the (possibly multi-line) headline fits within margins
-        max_text_width = _W - 120
-        lines = _wrap_text(draw, headline, font, max_text_width)
-        while len(lines) > 3 and font_size > 40:
-            font_size -= 10
-            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
-            lines = _wrap_text(draw, headline, font, max_text_width)
+        if cf_token:
+            return self._generate_cloudflare(prompt, output_path, cf_token)
+        elif hf_token:
+            return self._generate_huggingface(prompt, output_path, hf_token)
+        else:
+            # Fallback: save prompt for manual generation
+            txt_path = output_path + "_prompt.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"CINEMATIC THUMBNAIL PROMPT:\n\n{prompt}\n\n")
+                f.write(f"Niche: {niche}\n")
+                f.write(f"Title: {title}\n")
+                f.write(f"\nGenerated by YouTube-Automation-Factory ThumbnailMaker\n")
+                f.write(f"(Card Sovereign + CTR-optimized cinematic workflow)\n")
+            return txt_path
 
-        accent = random.choice(_ACCENT_COLORS)
-        line_height = int(font_size * 1.15)
-        total_height = line_height * len(lines)
-        y = _H - total_height - 60
+    def _generate_cloudflare(self, prompt: str, output_path: str, token: str) -> str:
+        """Generate thumbnail via Cloudflare Workers AI (free tier)."""
+        try:
+            account_id = os.environ.get("CF_ACCOUNT_ID", "")
+            url = (
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/"
+                f"ai/run/@cf/stabilityai/stable-diffusion-xl-base-1.0"
+            )
+            headers = {"Authorization": f"Bearer {token}"}
+            payload = {"prompt": prompt}
 
-        for line in lines:
-            text_width = draw.textlength(line, font=font)
-            x = (_W - text_width) // 2
-            # Bold black outline (stroke) behind the accent-colored fill --
-            # the single highest-impact technique for thumbnail readability
-            # at small preview sizes.
-            draw.text((x, y), line, font=font, fill=accent,
-                      stroke_width=8, stroke_fill=(0, 0, 0))
-            y += line_height
+            response = _requests.post(url, headers=headers, json=payload, timeout=60)
+            if response.status_code == 200:
+                result = response.json()
+                if "result" in result and "image" in result["result"]:
+                    img_path = output_path + ".png"
+                    import base64
+                    with open(img_path, "wb") as f:
+                        f.write(base64.b64decode(result["result"]["image"]))
+                    return img_path
+            return self._fallback_prompt(prompt, output_path)
+        except Exception as e:
+            return self._fallback_prompt(prompt, output_path)
 
-        out_name = out_name or f"thumb_{abs(hash(topic)) % 100000}.jpg"
-        out_path = os.path.join(_OUT_DIR, out_name)
-        img.save(out_path, "JPEG", quality=92)
-        return {"path": out_path, "headline": headline}
+    def _generate_huggingface(self, prompt: str, output_path: str, token: str) -> str:
+        """Generate thumbnail via HuggingFace Inference API (free tier)."""
+        try:
+            from gradio_client import Client
+            client = Client("black-forest-labs/FLUX.1-schnell", hf_token=token)
+            result = client.predict(
+                prompt=prompt,
+                seed=42,
+                randomize_seed=True,
+                num_inference_steps=4,
+                api_name="/infer",
+            )
+            image_path = result[0] if isinstance(result, tuple) else result
+            if os.path.exists(image_path):
+                import shutil
+                final_path = output_path + ".png"
+                shutil.copy(image_path, final_path)
+                return final_path
+            return self._fallback_prompt(prompt, output_path)
+        except Exception:
+            return self._fallback_prompt(prompt, output_path)
 
-
-if __name__ == "__main__":
-    maker = ThumbnailMaker()
-    demo_scenes = [{"clip": {"path": "", "type": "image"}}]
-    print(maker.make_thumbnail("The Cold Case That Took 50 Years To Solve", demo_scenes, "en"))
+    def _fallback_prompt(self, prompt: str, output_path: str) -> str:
+        txt_path = output_path + "_prompt.txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(f"CINEMATIC THUMBNAIL PROMPT:\n\n{prompt}\n")
+        return txt_path
